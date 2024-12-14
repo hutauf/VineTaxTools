@@ -8,6 +8,8 @@
 // @require     https://unpkg.com/dexie@latest/dist/dexie.js
 // @require     https://d3js.org/d3.v5.min.js
 // @require     https://cdn.plot.ly/plotly-latest.min.js
+// @require     https://code.jquery.com/jquery-3.5.1.js
+// @require     https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js
 // @grant       GM_setValue
 // @grant       GM_addStyle
 // @grant       GM_getValue
@@ -19,7 +21,9 @@
 // @description 30.6.2024, 18:20:31
 // ==/UserScript==
 
-
+GM_addStyle(`
+  @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
+`);
 
 
 (async function() {
@@ -72,64 +76,85 @@
                 return etv;
             }
 
-        async function load_all_asin_etv_values_from_storage() {
-            // Step 1: Fetch all keys stored by GM_listValues
-            let keys = await listValues();
+            async function load_all_asin_etv_values_from_storage() {
+                // Step 1: Fetch all keys stored by GM_listValues
+                let keys = await listValues();
 
-            // Step 2: Filter keys that start with "ASIN_"
-            let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
-            console.log(asinKeys.length)
-            // Step 3 & 4: Process each ASIN key and extract ASIN value
+                // Step 2: Filter keys that start with "ASIN_"
+                let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
+                console.log(asinKeys.length)
+                // Step 3 & 4: Process each ASIN key and extract ASIN value
 
-            let asinData = [];
-            let tempDataToSend = [];
+                let asinData = [];
+                let tempDataToSend = [];
 
-            for (let asinKey of asinKeys) {
-                let asin = asinKey.replace("ASIN_", ""); // Extract ASIN from key
-                let jsonData = await getValue(asinKey);     // Retrieve stored JSON data
+                for (let asinKey of asinKeys) {
+                    let asin = asinKey.replace("ASIN_", ""); // Extract ASIN from key
+                    let jsonData = await getValue(asinKey);     // Retrieve stored JSON data
 
-                // Parse JSON data if it exists
-                let parsedData = jsonData ? JSON.parse(jsonData) : {};
-                let [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
-                let jsDate = new Date(`${year}-${month}-${day}`);
-                console.log(day, month, year, asin, jsDate, parsedData.date);
-                try {
-                    parsedData.date = jsDate.toISOString();
-                } catch (error) {
-                    parsedData.date = "xxx";
-                }
-
-                // Return a structured object
-                asinData.push({
-                    ...parsedData,  // Include any existing keys from stored JSON
-                    ASIN: asin      // Add ASIN key
-                });
-                tempDataToSend.push({
-                    ASIN: asin,
-                    name: parsedData.name,
-                    ETV: parsedData.etv
-                });
-            };
-
-              GM_xmlhttpRequest({
-                method: 'POST',
-                url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
-                headers: { 'Content-Type': 'application/json' },
-                data: JSON.stringify(tempDataToSend),
-                onload: function(response) {
-                    if (response.status >= 200 && response.status < 300) {
-                        console.log("Data successfully sent to the server.");
-                    } else {
-                        console.error("Failed to send data to the server:", response.statusText);
+                    // Parse JSON data if it exists
+                    let parsedData = jsonData ? JSON.parse(jsonData) : {};
+                    let [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
+                    let jsDate = new Date(`${year}-${month}-${day}`);
+                    console.log(day, month, year, asin, jsDate, parsedData.date);
+                    try {
+                        parsedData.date = jsDate.toISOString();
+                    } catch (error) {
+                        parsedData.date = "xxx";
                     }
-                },
-                onerror: function(error) {
-                    console.error("Error sending data to the server:", error);
-                }
-            });
 
-            return asinData;
-        }
+                    // Return a structured object
+                    asinData.push({
+                        ...parsedData,  // Include any existing keys from stored JSON
+                        ASIN: asin      // Add ASIN key
+                    });
+                    tempDataToSend.push({
+                        ASIN: asin,
+                        name: parsedData.name,
+                        ETV: parsedData.etv
+                    });
+                };
+
+                  GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
+                    headers: { 'Content-Type': 'application/json' },
+                    data: JSON.stringify(tempDataToSend),
+                      onload: async function(response) { // Make this async
+                            if (response.status >= 200 && response.status < 300) {
+                                console.log("Data successfully sent to the server.");
+
+                                  try {
+                                    const responseData = JSON.parse(response.responseText);
+                                    if (responseData.existing_asins) {
+                                        for (const existingAsin of responseData.existing_asins) {
+                                            const asinKey = `ASIN_${existingAsin.asin}`;
+                                            // Store the server data in database under existing asin key
+                                             await setValue(asinKey, JSON.stringify({
+                                                ...JSON.parse(await getValue(asinKey) || '{}') ,
+                                                keepa: existingAsin.keepa,
+                                                teilwert: existingAsin.teilwert,
+                                                pdf: existingAsin.pdf
+                                                }));
+                                               console.log(`Updated local DB for ASIN: ${existingAsin.asin} with data:`, existingAsin);
+                                            }
+                                        }
+                                    }
+                                catch(e){
+                                  console.log(e);
+                                }
+
+                            } else {
+                                console.error("Failed to send data to the server:", response.statusText);
+                            }
+                        },
+                    onerror: function(error) {
+                        console.error("Error sending data to the server:", error);
+                    }
+                });
+
+                return asinData;
+            }
 
             // Function to load XLSX info
             async function loadXLSXInfo() {
@@ -172,10 +197,9 @@
                     // Log the number of items in the list
                     userlog(`nothing loaded yet. ${list.length} items in database`);
 
-                      createPieChart(list);
-
-                  createETVplots(list);
-  createCancellationRatioTable(list);
+                    createPieChart(list);
+                    createETVplots(list);
+                    createCancellationRatioTable(list);
 
                 }, 200);
             }
@@ -594,24 +618,33 @@ async function showAllData() {
         }
 
         // Create table
-        let table = `<table border="1" cellspacing="0" cellpadding="5">
+        let table = `<table id="asin-table" class="display" cellspacing="0" cellpadding="5">
                         <thead>
                             <tr>
                                 <th>ASIN</th>
                                 <th>Date</th>
                                 <th>Name</th>
-                                <th>Link to Product</th>
-                                <th>Link to Review</th>
+                                <th>ETV</th>
+                                <th>Keepa</th>
+                                <th>Teilwert</th>
+                                <th>PDF Report</th>
+                                <th>Product Link</th>
+                                <th>Review Link</th>
                             </tr>
                         </thead>
                         <tbody>`;
+
 
         // Add rows
         asinData.forEach(item => {
             table += `<tr>
                         <td>${item.ASIN}</td>
-                        <td>${item.date}</td>
-                        <td>${item.name}</td>
+                        <td>${item.date || 'N/A'}</td>
+                        <td>${item.name || 'N/A'}</td>
+                        <td>${item.etv || 'N/A'}</td>
+                        <td>${item.keepa != null ? item.keepa : 'N/A'}</td>
+                        <td>${item.teilwert != null ? item.teilwert : 'N/A'}</td>
+                        <td>${item.pdf ? `<a href="${item.pdf}" target="_blank">PDF Link</a>` : 'N/A'}</td>
                         <td><a href="https://www.amazon.de/dp/${item.ASIN}" target="_blank">Product Link</a></td>
                         <td><a href="https://www.amazon.de/review/create-review?encoding=UTF&asin=${item.ASIN}" target="_blank">Review Link</a></td>
                     </tr>`;
@@ -620,8 +653,14 @@ async function showAllData() {
         table += `</tbody>
                 </table>`;
 
+
         // Update the dataTableDiv with the table
         dataTableDiv.innerHTML = table;
+        // Initialize DataTables after the table is added to the DOM
+          $(document).ready(function() {
+             $('#asin-table').DataTable({
+             });
+          });
 
     } catch (error) {
         dataTableDiv.innerHTML = `<p>Error loading data: ${error.message}</p>`;
@@ -728,14 +767,10 @@ console.log(cancelledAsins);
 
 }
 
-
-
-
             function userlog(txt) {
                 console.log(txt);
                 document.getElementById('status').textContent = txt;
             }
-
 
             var currentPageURL = window.location.href;
 
