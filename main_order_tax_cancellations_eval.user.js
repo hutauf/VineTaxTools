@@ -24,24 +24,24 @@
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
   `);
-  
+
   (async function() {
       'use strict';
-  
+
             const db = new Dexie('myDatabase');
             db.version(1).stores({
               keyValuePairs: 'key'
             });
-  
+
             async function setValue(key, value) {
               await db.keyValuePairs.put({ key, value });
             }
-  
+
             async function getValue(key, defaultValue = null) {
               const result = await db.keyValuePairs.get(key);
               return result ? result.value : defaultValue;
             }
-  
+
             async function listValues() {
               try {
                 return (await db.keyValuePairs.toCollection().primaryKeys());
@@ -50,29 +50,29 @@ GM_addStyle(`
                 return [];
               }
             }
-  
+
               function etvstrtofloat(etvString) {
                   const cleanString = etvString.replace(/[€ ]/g, '');
                   const cleanedValue = cleanString.replace(/[.,](?=\d{3})/g, '');
                   const etv = parseFloat(cleanedValue.replace(',', '.'));
                   return etv;
               }
-  
+
               async function load_all_asin_etv_values_from_storage() {
                   window.progressBar.setText('Loading data from storage...');
                   let keys = await listValues();
                   let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
                   console.log(asinKeys.length)
-  
+
                   let asinData = [];
                   let tempDataToSend = [];
-  
+
                   for (let asinKey of asinKeys) {
                       let asin = asinKey.replace("ASIN_", "");
                       window.progressBar.setText(`Loading data for ASIN ${asin}... (${asinKeys.indexOf(asinKey) + 1}/${asinKeys.length})`);
                       window.progressBar.setFillWidth(((asinKeys.indexOf(asinKey) + 1) / asinKeys.length) * 100);
                       let jsonData = await getValue(asinKey);
-  
+
                       let parsedData = jsonData ? JSON.parse(jsonData) : {};
                       let [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
                       let jsDate = new Date(`${year}-${month}-${day}`);
@@ -82,7 +82,7 @@ GM_addStyle(`
                         console.log("error loading date, probably page not fully loaded");
                           continue;
                       }
-  
+
                       asinData.push({
                           ...parsedData,
                           ASIN: asin
@@ -108,13 +108,13 @@ GM_addStyle(`
                         onload: async function(response) {
                               if (response.status >= 200 && response.status < 300) {
                                   console.log("Data successfully sent to the server.");
-  
+
                                     try {
                                       const responseData = JSON.parse(response.responseText);
                                       if (responseData.existing_asins) {
                                           for (const existingAsin of responseData.existing_asins) {
-                                            window.progressBar.setText("upload successful, updating local data now (" + (responseData.existing_asins.indexOf(existingAsin) + 1) + "/" + responseData.existing_asins.length + ")");
-                                            window.progressBar.setFillWidth(((responseData.existing_asins.indexOf(existingAsin) + 1) / responseData.existing_asins.length) * 100);
+                                            window.progressBar.setText("upload successful, updating local data now (" + (responseData.existingAsins.indexOf(existingAsin) + 1) + "/" + responseData.existing_asins.length + ")");
+                                            window.progressBar.setFillWidth(((responseData.existingAsins.indexOf(existingAsin) + 1) / responseData.existing_asins.length) * 100);
                                             const asinKey = `ASIN_${existingAsin.asin}`;
                                                await setValue(asinKey, JSON.stringify({
                                                   ...JSON.parse(await getValue(asinKey) || '{}') ,
@@ -128,7 +128,7 @@ GM_addStyle(`
                                   catch(e){
                                     console.log(e);
                                   }
-  
+
                               } else {
                                   console.error("Failed to send data to the server:", response.statusText);
                               }
@@ -138,10 +138,10 @@ GM_addStyle(`
                           console.error("Error sending data to the server:", error);
                       }
                   });
-                  
+
                   return asinData;
               }
-  
+
               async function loadXLSXInfo() {
                   userlog("starting xlsx export");
                   try {
@@ -150,7 +150,7 @@ GM_addStyle(`
                       userlog("found year to be " + year);
                       const blobData = await fetchData(year);
                       await parseExcel(blobData);
-  
+
                       const status = document.getElementById('status');
                       status.textContent = `Extraction successful. Data is stored locally.`;
                   } catch (error) {
@@ -159,7 +159,7 @@ GM_addStyle(`
                       status.textContent = 'Error loading XLSX info';
                   }
               }
-  
+
               function createSimpleProgressBar(container) {
                 const progressBarContainer = document.createElement('div');
                 progressBarContainer.id = 'simpleProgressBarContainer';
@@ -168,23 +168,23 @@ GM_addStyle(`
                 progressBarContainer.style.alignItems = 'center';
                 progressBarContainer.style.marginBottom = '5px'; // Add a little space
                 progressBarContainer.style.width = '500px'; // Full width
-              
+
                 const progressBarFill = document.createElement('div');
                 progressBarFill.id = 'simpleProgressBarFill';
                 progressBarFill.style.height = '15px';
                 progressBarFill.style.backgroundColor = 'lightblue';
                 progressBarFill.style.width = '0%'; // Initial width
-              
+
                 const progressText = document.createElement('span');
                 progressText.id = 'simpleProgressText';
                 progressText.style.marginLeft = '5px';
                 progressText.innerText = 'Loading...';
                 progressText.style.position = 'absolute';
-              
+
                 progressBarContainer.appendChild(progressBarFill);
                 progressBarContainer.appendChild(progressText);
                 container.appendChild(progressBarContainer);
-              
+
                 return {
                   setFillWidth: (percentage) => {
                     progressBarFill.style.width = `${percentage}%`;
@@ -212,7 +212,7 @@ GM_addStyle(`
           </div>
       `;
                   container.appendChild(div);
-  
+
                   const containerfordata = document.getElementById('vvp-tax-information-container');
                 const divdata = document.createElement('div');
                 divdata.innerHTML = `
@@ -226,51 +226,55 @@ GM_addStyle(`
                       const list = await load_all_asin_etv_values_from_storage();
                       userlog(`nothing loaded yet. ${list.length} items in database`);
                       createYearlyBreakdown(list);
-  
+
                   }, 200);
               }
-  
+
   async function createYearlyBreakdown(list) {
       const sortedItems = list.map(item => ({
           ...item,
           date: new Date(item.date)
       })).sort((a, b) => a.date - b.date);
-  
+
       const years = [...new Set(sortedItems.map(item => item.date.getFullYear()))];
-  
+
       const container = document.getElementById('vvp-tax-information-container');
-  
-      years.forEach(year => {
+
+      years.forEach(async year => {
           const yearContainer = document.createElement('div');
           yearContainer.id = `year-container-${year}`;
           yearContainer.style.border = '1px solid #ccc';
           yearContainer.style.padding = '10px';
           yearContainer.style.marginBottom = '20px';
-  
+
           const title = document.createElement('h3');
           title.textContent = `Year ${year}`;
           yearContainer.appendChild(title);
           container.appendChild(yearContainer);
-  
+
           const yearlyItems = sortedItems.filter(item => item.date.getFullYear() === year);
-          createPieChart(yearlyItems, yearContainer);
-          createETVPlot(year, yearlyItems, new Date(year, 11, 30), yearContainer); // Assuming end of year for plot
-          createCancellationRatioTable(yearlyItems, yearContainer);
+          await createPieChart(yearlyItems, yearContainer);
+          await createETVPlot(year, yearlyItems, new Date(year, 11, 30), yearContainer); // Assuming end of year for plot
+          await createCancellationRatioTable(yearlyItems, yearContainer);
+          await createTeilwertSummaryTable(yearlyItems, yearContainer);
       });
   }
-  
+
   async function createETVPlot(taxYear, items, endDate, parentElement) {
+      const cancelledAsins = await getValue("cancellations", []);
+      const filteredItems = items.filter(item => !cancelledAsins.includes(item.ASIN));
+
       const width = 600, height = 400;
       const dataByDateMap = new Map();
       let currentEtv = 0;
-      items.forEach(d => {
+      filteredItems.forEach(d => {
           const dateKey = d.date.toISOString().split('T')[0];
           currentEtv += d.etv;
           dataByDateMap.set(dateKey, currentEtv);
       });
-  
+
       const dataByDate = Array.from(dataByDateMap, ([date, etv]) => ({ date: new Date(date), etv }));
-  
+
       const historicalTrace = {
           x: dataByDate.map(d => d.date),
           y: dataByDate.map(d => d.etv),
@@ -279,16 +283,16 @@ GM_addStyle(`
           name: 'Historical ETV',
           line: { color: 'steelblue' }
       };
-  
+
       const firstPoint = dataByDate[0];
       const lastPoint = dataByDate[dataByDate.length - 1];
       const projectedEtv = lastPoint.etv + (lastPoint.etv - firstPoint.etv) * ((endDate - lastPoint.date) / (lastPoint.date - firstPoint.date));
-  
+
       const projectionData = [
           { date: firstPoint.date, etv: firstPoint.etv },
           { date: endDate, etv: projectedEtv }
       ];
-  
+
       const projectionTrace = {
           x: projectionData.map(d => d.date),
           y: projectionData.map(d => d.etv),
@@ -297,11 +301,50 @@ GM_addStyle(`
           name: 'Projected ETV',
           line: { color: 'orange', dash: 'dash' }
       };
-  
+
       const data = [historicalTrace, projectionTrace];
-  
+
+      // Add teilwert curves
+      const itemsWithTeilwert = filteredItems.filter(item => item.teilwert != null);
+      if (itemsWithTeilwert.length >= 10) {
+          const teilwertEtvRatios = itemsWithTeilwert.map(item => {
+              if (item.teilwert === null || isNaN(item.teilwert) || item.teilwert < 0) {
+                  console.log("Invalid teilwert found:", item);
+              }
+              if (item.etv <= 0 || isNaN(item.etv)) {
+                  console.log("Invalid etv found:", item);
+              }
+              return item.teilwert / item.etv;
+          });
+          const validRatios = teilwertEtvRatios.filter(ratio => !isNaN(ratio)); // Filter out NaN values
+          if (validRatios.length > 0) {
+              const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
+
+              if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5) {
+                  const teilwertDataMap = new Map();
+                  let currentTeilwert = 0;
+                  filteredItems.forEach(d => {
+                      const dateKey = d.date.toISOString().split('T')[0];
+                      currentTeilwert += (d.teilwert != null ? d.teilwert : (d.etv * avgTeilwertEtvRatio));
+                      teilwertDataMap.set(dateKey, currentTeilwert);
+                  });
+                  const teilwertData = Array.from(teilwertDataMap, ([date, teilwert]) => ({ date: new Date(date), teilwert }));
+
+                  const teilwertTrace = {
+                      x: teilwertData.map(d => d.date),
+                      y: teilwertData.map(d => d.teilwert),
+                      mode: 'lines',
+                      type: 'scatter',
+                      name: 'Historical + Estimated Teilwert',
+                      line: { color: 'green' }
+                  };
+                  data.push(teilwertTrace);
+              }
+          }
+      }
+
       const layout = {
-          title: `ETV over Time`,
+          title: `ETV and Teilwert over Time`,
           xaxis: {
               title: 'Date',
               tickformat: '%b %d',
@@ -309,7 +352,7 @@ GM_addStyle(`
               tickangle: -45
           },
           yaxis: {
-              title: 'ETV',
+              title: 'Value',
               autorange: true
           },
           margin: {
@@ -321,68 +364,215 @@ GM_addStyle(`
         width: "80%",
         height: "30%"
       };
-  
+
       const containerId = `plot-container-${taxYear}`;
       const newDiv = document.createElement('div');
       newDiv.id = containerId;
       parentElement.appendChild(newDiv);
-  
+
       Plotly.newPlot(containerId, data, layout);
   }
-  
-  function createPieChart(list, parentElement) {
-          const priceCounts = list.reduce((acc, item) => {
-              if (item.etv === 0) {
-                  acc.zero += 1;
-              } else {
-                  acc.nonZero += 1;
-              }
-              return acc;
-          }, { zero: 0, nonZero: 0 });
-  
-          const data = [
-              { category: 'tax0', count: priceCounts.zero },
-              { category: 'TAX', count: priceCounts.nonZero }
-          ];
-  
-          const width = 300, height = 300, margin = 40;
-          const radius = Math.min(width, height) / 2 - margin;
-  
-          const svg = d3.select(parentElement).append('svg')
-              .attr('width', width)
-              .attr('height', height)
-              .append('g')
-              .attr('transform', `translate(${width / 2}, ${height / 2})`);
-  
-          const pie = d3.pie().value(d => d.count);
-          const arc = d3.arc().outerRadius(radius).innerRadius(0);
-  
-          const color = d3.scaleOrdinal()
-              .domain(data.map(d => d.category))
-              .range(['#ff9999', '#66b3ff']);
-  
-          svg.selectAll('slice')
-              .data(pie(data))
-              .enter().append('path')
-              .attr('d', arc)
-              .attr('fill', d => color(d.data.category))
-              .attr('stroke', 'white')
-              .style('stroke-width', '2px');
-  
-          svg.selectAll('label')
-              .data(pie(data))
-              .enter().append('text')
-              .attr('transform', d => `translate(${arc.centroid(d)})`)
-              .attr('dy', '0.35em')
-              .style('text-anchor', 'middle')
-              .text(d => `${d.data.category}: ${d.data.count}`);
+
+  async function createPieChart(list, parentElement) {
+      const cancelledAsins = await getValue("cancellations", []);
+
+      const counts = list.reduce((acc, item) => {
+          if (cancelledAsins.includes(item.ASIN)) {
+              acc.cancellations += 1;
+          } else if (item.etv === 0) {
+              acc.tax0 += 1;
+          } else if (item.teilwert != null) {
+              acc.teilwertAvailable += 1;
+          } else {
+              acc.teilwertMissing += 1;
+          }
+          return acc;
+      }, { cancellations: 0, tax0: 0, teilwertAvailable: 0, teilwertMissing: 0 });
+
+      const data = [
+          { category: 'Cancellations', count: counts.cancellations },
+          { category: 'tax0', count: counts.tax0 },
+          { category: 'Teilwert Available', count: counts.teilwertAvailable },
+          { category: 'Teilwert Missing', count: counts.teilwertMissing }
+      ];
+
+      const width = 300, height = 300, margin = 40;
+      const radius = Math.min(width, height) / 2 - margin;
+
+      const svg = d3.select(parentElement).append('svg')
+          .attr('width', width)
+          .attr('height', height)
+          .append('g')
+          .attr('transform', `translate(${width / 2}, ${height / 2})`);
+
+      const pie = d3.pie().value(d => d.count);
+      const arc = d3.arc().outerRadius(radius).innerRadius(0);
+      const outerArc = d3.arc().innerRadius(radius * 0.9).outerRadius(radius * 0.9);
+
+      const color = d3.scaleOrdinal()
+          .domain(data.map(d => d.category))
+          .range(['#808080', '#ff9999', '#66b3ff', '#99ff99']);
+
+      svg.selectAll('slices')
+          .data(pie(data))
+          .enter().append('path')
+          .attr('d', arc)
+          .attr('fill', d => color(d.data.category))
+          .attr('stroke', 'white')
+          .style('stroke-width', '2px');
+
+      // Add labels with connecting lines
+      svg.selectAll('labels')
+          .data(pie(data))
+          .enter()
+          .append('text')
+          .attr('dy', '.35em')
+          .attr('transform', d => {
+              const pos = outerArc.centroid(d);
+              pos[0] = radius * (midAngle(d) < Math.PI ? 1 : -1);
+              return `translate(${pos})`;
+          })
+          .style('text-anchor', d => (midAngle(d)) < Math.PI ? 'start' : 'end')
+          .text(d => `${d.data.category}: ${d.data.count}`);
+
+      // Add polylines between chart and labels
+      svg.selectAll('lines')
+          .data(pie(data))
+          .enter()
+          .append('polyline')
+          .attr('stroke', 'black')
+          .style('fill', 'none')
+          .attr('stroke-width', 1)
+          .attr('points', d => {
+              const posA = arc.centroid(d);
+              const posB = outerArc.centroid(d);
+              const posC = outerArc.centroid(d);
+              posC[0] = radius * 0.95 * (midAngle(d) < Math.PI ? 1 : -1);
+              return [posA, posB, posC];
+          });
+
+      function midAngle(d) {
+          return d.startAngle + (d.endAngle - d.startAngle) / 2;
       }
-  
+  }
+
+  async function createTeilwertSummaryTable(list, parentElement) {
+      const cancelledAsins = await getValue("cancellations", []);
+      const filteredList = list.filter(item => !cancelledAsins.includes(item.ASIN));
+
+      const itemsWithTeilwert = filteredList.filter(item => item.teilwert != null);
+      const itemsWithoutTeilwert = filteredList.filter(item => item.teilwert == null && item.etv > 0);
+
+      if (itemsWithTeilwert.length >= 10) {
+          const teilwertEtvRatios = itemsWithTeilwert.map(item => {
+              if (item.teilwert === null || isNaN(item.teilwert) || item.teilwert < 0) {
+                  console.log("Invalid teilwert found in createTeilwertSummaryTable:", item);
+              }
+              if (item.etv <= 0 || isNaN(item.etv)) {
+                  console.log("Invalid etv found in createTeilwertSummaryTable:", item);
+              }
+              return item.teilwert / item.etv;
+          });
+          const validRatios = teilwertEtvRatios.filter(ratio => !isNaN(ratio));
+          if (validRatios.length > 0) {
+              const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
+
+              if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5 && itemsWithoutTeilwert.length > 0) {
+                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + item.teilwert, 0);
+                  const estimatedTeilwert = itemsWithoutTeilwert.reduce((sum, item) => sum + (item.etv * avgTeilwertEtvRatio), 0);
+                  const overallTeilwert = totalTeilwert + estimatedTeilwert;
+
+                  const table = d3.select(parentElement).append('table').attr('class', 'teilwert-summary-table');
+                  const thead = table.append('thead');
+                  thead.append('tr').selectAll('th')
+                      .data(['', 'Value'])
+                      .enter().append('th').text(d => d);
+
+                  const tbody = table.append('tbody');
+                  const rows = [
+                      { label: 'Total Teilwert (Known)', value: totalTeilwert.toFixed(2) },
+                      { label: 'Estimated Teilwert (Missing)', value: estimatedTeilwert.toFixed(2) },
+                      { label: 'Overall Estimated Teilwert', value: overallTeilwert.toFixed(2) }
+                  ];
+                  rows.forEach(row => {
+                      const tr = tbody.append('tr');
+                      tr.append('td').text(row.label);
+                      tr.append('td').text(row.value);
+                  });
+
+                  const tableStyles = `
+                      <style>
+                          .teilwert-summary-table {
+                              width: 80%;
+                              border-collapse: collapse;
+                              margin-top: 10px;
+                          }
+                          .teilwert-summary-table th, .teilwert-summary-table td {
+                              border: 1px solid #ddd;
+                              padding: 8px;
+                              text-align: left;
+                          }
+                          .teilwert-summary-table th {
+                              background-color: #f2f2f2;
+                              font-weight: bold;
+                          }
+                      </style>
+                  `;
+                  d3.select(parentElement).append('div').html(tableStyles);
+
+              } else if (itemsWithoutTeilwert.length === 0) {
+                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + item.teilwert, 0);
+                  const table = d3.select(parentElement).append('table').attr('class', 'teilwert-summary-table');
+                  const thead = table.append('thead');
+                  thead.append('tr').selectAll('th')
+                      .data(['', 'Value'])
+                      .enter().append('th').text(d => d);
+
+                  const tbody = table.append('tbody');
+                  const rows = [
+                      { label: 'Total Teilwert', value: totalTeilwert.toFixed(2) }
+                  ];
+                  rows.forEach(row => {
+                      const tr = tbody.append('tr');
+                      tr.append('td').text(row.label);
+                      tr.append('td').text(row.value);
+                  });
+
+                  const tableStyles = `
+                      <style>
+                          .teilwert-summary-table {
+                              width: 80%;
+                              border-collapse: collapse;
+                              margin-top: 10px;
+                          }
+                          .teilwert-summary-table th, .teilwert-summary-table td {
+                              border: 1px solid #ddd;
+                              padding: 8px;
+                              text-align: left;
+                          }
+                          .teilwert-summary-table th {
+                              background-color: #f2f2f2;
+                              font-weight: bold;
+                          }
+                      </style>
+                  `;
+                  d3.select(parentElement).append('div').html(tableStyles);
+              } else {
+                  parentElement.append(document.createTextNode("Not enough data to reliably estimate total Teilwert."));
+              }
+          } else {
+              parentElement.append(document.createTextNode("Not enough valid items with Teilwert to estimate."));
+          }
+      } else {
+          parentElement.append(document.createTextNode("Not enough items with Teilwert to estimate."));
+      }
+  }
+
               function userlog(txt) {
                   console.log(txt);
                   document.getElementById('status').textContent = txt;
               }
-  
+
               async function fetchData(year) {
                   userlog("trying to fetch tax data from amazon")
                   const url = `https://www.amazon.de/vine/api/get-tax-report?year=${year}&fileType=XLSX`;
@@ -392,16 +582,16 @@ GM_addStyle(`
                   userlog("successfully received tax data")
                   return data.result.bytes;
               }
-  
+
               async function parseExcel(data) {
                   const binary = atob(data);
                   const binaryLength = binary.length;
                   const bytesArray = new Uint8Array(binaryLength);
-  
+
                   for (let i = 0; i < binaryLength; i++) {
                       bytesArray[i] = binary.charCodeAt(i);
                   }
-  
+
                   const workbook = XLSX.read(bytesArray, { type: 'array' });
                   const sheetName = workbook.SheetNames[0];
                   const worksheet = workbook.Sheets[sheetName];
@@ -410,11 +600,11 @@ GM_addStyle(`
                   const extractedData = await extractData(json);
                   saveData(extractedData);
               }
-  
+
               function parseOrdersTable() {
                   const orders = document.querySelectorAll(".vvp-orders-table--row");
                   const data = {};
-  
+
                   orders.forEach((order) => {
                       const orderDate = order.querySelector(".vvp-orders-table--text-col[data-order-timestamp]").textContent;
                       const elements = order.querySelectorAll(".vvp-orders-table--text-col");
@@ -451,23 +641,23 @@ GM_addStyle(`
                           }
                       }
                   });
-  
+
                   return data;
               }
-  
+
               async function extractData(json) {
                   const data = {};
                   const headerRowIndex = 2;
                   const header = json[headerRowIndex];
-  
+
                   let cancellations = await getValue('cancellations', []);
-  
+
                   for (let i = headerRowIndex + 1; i < json.length; i++) {
                       const row = json[i];
                       if (row.length < header.length) {
                           continue;
                       }
-  
+
                       const orderNumber = row[0];
                       const asin = row[1];
                       const name = row[2];
@@ -475,14 +665,14 @@ GM_addStyle(`
                       const orderDate = row[4];
                       const etvString = row[row.length - 1];
                       const etv = etvstrtofloat(etvString);
-  
+
                       if (orderType === 'CANCELLATION') {
                           if (!cancellations.includes(asin)) {
                               cancellations.push(asin);
                               setValue('cancellations', cancellations);
                           }
                       }
-  
+
                       if (!data[asin]) {
                           data[asin] = {
                               name: name,
@@ -494,17 +684,17 @@ GM_addStyle(`
                           data[asin].etv += etv;
                       }
                   }
-  
+
                   return data;
               }
-  
+
               function saveData(data) {
                   for (const asin in data) {
                       const key = `ASIN_${asin}`;
                       setValue(key, JSON.stringify(data[asin]));
                   }
               }
-  
+
               async function loadXLSXInfo() {
                   userlog("starting xlsx export");
                   try {
@@ -513,7 +703,7 @@ GM_addStyle(`
                       userlog("found year to be " + year);
                       const blobData = await fetchData(year);
                       await parseExcel(blobData);
-  
+
                       const status = document.getElementById('status');
                       status.textContent = `Extraction successful. Data is stored locally.`;
                   } catch (error) {
@@ -522,14 +712,14 @@ GM_addStyle(`
                       status.textContent = 'Error loading XLSX info';
                   }
               }
-  
+
               async function loadOrdersInfo() {
                   userlog("Starting order info extraction");
-  
+
                   try {
                       const jsonData = parseOrdersTable();
                       saveData(jsonData);
-  
+
                       const status = document.getElementById('status');
                       status.textContent = `Extraction successful. Number of items: ${Object.keys(jsonData).length}`;
                   } catch (error) {
@@ -538,10 +728,10 @@ GM_addStyle(`
                       status.textContent = 'Error loading order info';
                   }
               }
-  
+
   function createUIorderpage() {
       const container = document.querySelector('.a-normal.vvp-orders-table');
-  
+
       const div = document.createElement('div');
       div.innerHTML = `
           <div id="vine-data-extractor" style="margin-top: 20px;">
@@ -552,18 +742,18 @@ GM_addStyle(`
           </div>
       `;
       container.parentNode.insertBefore(div, container.nextSibling);
-  
+
       setTimeout(() => {
           document.getElementById('load-orders-info').addEventListener('click', loadOrdersInfo);
           document.getElementById('show-all-data').addEventListener('click', showAllData);
           loadOrdersInfo();
       }, 200);
   }
-  
+
   async function showAllData() {
       const dataTableDiv = document.getElementById('data-table');
       dataTableDiv.innerHTML = '<p>Loading data...</p>';
-  
+
       try {
           const asinData = await load_all_asin_etv_values_from_storage();
 
@@ -571,7 +761,7 @@ GM_addStyle(`
               dataTableDiv.innerHTML = '<p>No data found.</p>';
               return;
           }
-  
+
           let table = `<table id="asin-table" class="display" cellspacing="0" cellpadding="5">
                           <thead>
                               <tr>
@@ -587,7 +777,7 @@ GM_addStyle(`
                               </tr>
                           </thead>
                           <tbody>`;
-  
+
           asinData.forEach(item => {
               table += `<tr>
                           <td>${item.ASIN}</td>
@@ -601,41 +791,41 @@ GM_addStyle(`
                           <td><a href="https://www.amazon.de/review/create-review?encoding=UTF&asin=${item.ASIN}" target="_blank">Review Link</a></td>
                       </tr>`;
           });
-  
+
           table += `</tbody>
                   </table>`;
-  
+
           dataTableDiv.innerHTML = table;
             $(document).ready(function() {
                $('#asin-table').DataTable({
                    lengthMenu: [10, 25, 50, 100, 1000000]
                });
             });
-  
+
       } catch (error) {
           dataTableDiv.innerHTML = `<p>Error loading data: ${error.message}</p>`;
       }
   }
-  
+
   async function createCancellationRatioTable(list, parentElement) {
       const yearlyData = {};
       const cancelledAsins = await getValue("cancellations", []);
-  console.log(cancelledAsins);
+
       list.forEach(item => {
-  
+
           const year = item.date.getFullYear();
-  
+
           if (!yearlyData[year]) {
               yearlyData[year] = { orders: 0, cancellations: 0 };
           }
-  
+
           yearlyData[year].orders++;
-  
+
           if (cancelledAsins.includes(item.ASIN)) {
               yearlyData[year].cancellations++;
           }
       });
-  
+
       const tableData = Object.keys(yearlyData).map(year => {
           const data = yearlyData[year];
           const cancellationRatio = (data.cancellations / data.orders) * 100;
@@ -646,9 +836,9 @@ GM_addStyle(`
               cancellationRatio: cancellationRatio.toFixed(2) + '%'
           };
       });
-  
+
       tableData.sort((a, b) => a.year - b.year);
-  
+
       const table = d3.select(parentElement).append('table').attr('class', 'cancellation-ratio-table');
       const thead = table.append('thead');
       thead.append('tr')
@@ -657,7 +847,7 @@ GM_addStyle(`
           .enter()
           .append('th')
           .text(d => d);
-  
+
       const tbody = table.append('tbody');
       tableData.forEach(yearlyRecord => {
           const row = tbody.append('tr');
@@ -666,7 +856,7 @@ GM_addStyle(`
           row.append('td').text(yearlyRecord.cancellations);
           row.append('td').text(yearlyRecord.cancellationRatio);
       });
-  
+
       const tableStyles = `
           <style>
               .cancellation-ratio-table {
@@ -684,18 +874,18 @@ GM_addStyle(`
               }
           </style>
       `;
-  
+
       d3.select(parentElement).append('div').html(tableStyles);
-  
+
   }
-  
+
               function userlog(txt) {
                   console.log(txt);
                   document.getElementById('status').textContent = txt;
               }
-  
+
               var currentPageURL = window.location.href;
-  
+
               if (currentPageURL === "https://www.amazon.de/vine/account") {
                   window.addEventListener('load', function() {
                     createUI_taxextractor();
