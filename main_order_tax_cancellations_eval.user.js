@@ -59,6 +59,7 @@ GM_addStyle(`
               }
   
               async function load_all_asin_etv_values_from_storage() {
+                  window.progressBar.setText('Loading data from storage...');
                   let keys = await listValues();
                   let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
                   console.log(asinKeys.length)
@@ -68,6 +69,8 @@ GM_addStyle(`
   
                   for (let asinKey of asinKeys) {
                       let asin = asinKey.replace("ASIN_", "");
+                      window.progressBar.setText(`Loading data for ASIN ${asin}... (${asinKeys.indexOf(asinKey) + 1}/${asinKeys.length})`);
+                      window.progressBar.setFillWidth(((asinKeys.indexOf(asinKey) + 1) / asinKeys.length) * 100);
                       let jsonData = await getValue(asinKey);
   
                       let parsedData = jsonData ? JSON.parse(jsonData) : {};
@@ -76,7 +79,8 @@ GM_addStyle(`
                       try {
                           parsedData.date = jsDate.toISOString();
                       } catch (error) {
-                          parsedData.date = "xxx";
+                        console.log("error loading date, probably page not fully loaded");
+                          continue;
                       }
   
                       asinData.push({
@@ -89,7 +93,13 @@ GM_addStyle(`
                           ETV: parsedData.etv
                       });
                   };
-  
+                    window.progressBar.setText("uploading anonymized data to server now");
+                    window.progressBar.setFillWidth(0);
+                    for (let i = 1; i < 10; i++) {
+                        setTimeout(() => {
+                            window.progressBar.setFillWidth(i*10);
+                        }, 300*i);
+                    }
                     GM_xmlhttpRequest({
                       method: 'POST',
                       url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
@@ -103,14 +113,15 @@ GM_addStyle(`
                                       const responseData = JSON.parse(response.responseText);
                                       if (responseData.existing_asins) {
                                           for (const existingAsin of responseData.existing_asins) {
-                                              const asinKey = `ASIN_${existingAsin.asin}`;
+                                            window.progressBar.setText("upload successful, updating local data now (" + (responseData.existing_asins.indexOf(existingAsin) + 1) + "/" + responseData.existing_asins.length + ")");
+                                            window.progressBar.setFillWidth(((responseData.existing_asins.indexOf(existingAsin) + 1) / responseData.existing_asins.length) * 100);
+                                            const asinKey = `ASIN_${existingAsin.asin}`;
                                                await setValue(asinKey, JSON.stringify({
                                                   ...JSON.parse(await getValue(asinKey) || '{}') ,
                                                   keepa: existingAsin.keepa,
                                                   teilwert: existingAsin.teilwert,
                                                   pdf: existingAsin.pdf
                                                   }));
-                                                 console.log(`Updated local DB for ASIN: ${existingAsin.asin} with data:`, existingAsin);
                                               }
                                           }
                                       }
@@ -121,12 +132,13 @@ GM_addStyle(`
                               } else {
                                   console.error("Failed to send data to the server:", response.statusText);
                               }
+                              window.progressBar.destroy();
                           },
                       onerror: function(error) {
                           console.error("Error sending data to the server:", error);
                       }
                   });
-  
+                  
                   return asinData;
               }
   
@@ -148,20 +160,69 @@ GM_addStyle(`
                   }
               }
   
+              function createSimpleProgressBar(container) {
+                const progressBarContainer = document.createElement('div');
+                progressBarContainer.id = 'simpleProgressBarContainer';
+                progressBarContainer.style.border = '1px solid black';
+                progressBarContainer.style.display = 'flex';
+                progressBarContainer.style.alignItems = 'center';
+                progressBarContainer.style.marginBottom = '5px'; // Add a little space
+                progressBarContainer.style.width = '500px'; // Full width
+              
+                const progressBarFill = document.createElement('div');
+                progressBarFill.id = 'simpleProgressBarFill';
+                progressBarFill.style.height = '15px';
+                progressBarFill.style.backgroundColor = 'lightblue';
+                progressBarFill.style.width = '0%'; // Initial width
+              
+                const progressText = document.createElement('span');
+                progressText.id = 'simpleProgressText';
+                progressText.style.marginLeft = '5px';
+                progressText.innerText = 'Loading...';
+                progressText.style.position = 'absolute';
+              
+                progressBarContainer.appendChild(progressBarFill);
+                progressBarContainer.appendChild(progressText);
+                container.appendChild(progressBarContainer);
+              
+                return {
+                  setFillWidth: (percentage) => {
+                    progressBarFill.style.width = `${percentage}%`;
+                  },
+                  setText: (text) => {
+                    progressText.innerText = text;
+                  },
+                  destroy: () => {
+                    container.removeChild(progressBarContainer);
+                  }
+                };
+              }
+
               function createUI_taxextractor() {
                   const container = document.querySelector('#vvp-tax-information-responsive-container');
-  
+                  const progressBar = createSimpleProgressBar(container);
+                  window.progressBar = progressBar;
+                  progressBar.setText('Loading...');
                   const div = document.createElement('div');
                   div.innerHTML = `
           <div id="vine-data-extractor" style="margin-top: 20px;">
               <button id="load-xlsx-info" class="">Load XLSX Info</button>
+              <button id="show-all-data">Show All Data</button>
               <div id="status" style="margin-top: 10px;">nothing loaded yet</div>
           </div>
       `;
                   container.appendChild(div);
   
+                  const containerfordata = document.getElementById('vvp-tax-information-container');
+                const divdata = document.createElement('div');
+                divdata.innerHTML = `
+                <div id="data-table" style="margin-top: 20px;"></div>
+                `;
+                containerfordata.appendChild(divdata);
+
                   setTimeout(async () => {
                       document.getElementById('load-xlsx-info').addEventListener('click', loadXLSXInfo);
+                      document.getElementById('show-all-data').addEventListener('click', showAllData);
                       const list = await load_all_asin_etv_values_from_storage();
                       userlog(`nothing loaded yet. ${list.length} items in database`);
                       createYearlyBreakdown(list);
@@ -505,6 +566,7 @@ GM_addStyle(`
   
       try {
           const asinData = await load_all_asin_etv_values_from_storage();
+
           if (asinData.length === 0) {
               dataTableDiv.innerHTML = '<p>No data found.</p>';
               return;
@@ -546,6 +608,7 @@ GM_addStyle(`
           dataTableDiv.innerHTML = table;
             $(document).ready(function() {
                $('#asin-table').DataTable({
+                   lengthMenu: [10, 25, 50, 100, 1000000]
                });
             });
   
@@ -560,7 +623,7 @@ GM_addStyle(`
   console.log(cancelledAsins);
       list.forEach(item => {
   
-          const year = item.date.year;
+          const year = item.date.getFullYear();
   
           if (!yearlyData[year]) {
               yearlyData[year] = { orders: 0, cancellations: 0 };
