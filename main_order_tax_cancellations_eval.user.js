@@ -35,7 +35,6 @@ GM_addStyle(`
   
             async function setValue(key, value) {
               await db.keyValuePairs.put({ key, value });
-              console.log(`Stored ${key}: ${value}`);
             }
   
             async function getValue(key, defaultValue = null) {
@@ -45,21 +44,10 @@ GM_addStyle(`
   
             async function listValues() {
               try {
-                return (await db.keyValuePairs.toCollection().primaryKeys())
-                const allItems = await db.keyValuePairs.toArray();
-                return allItems.map(pair => pair.key);
+                return (await db.keyValuePairs.toCollection().primaryKeys());
               } catch (error) {
                 console.error("Error listing values:", error);
                 return [];
-              }
-            }
-  
-              async function deleteValue(key) {
-              try {
-                await db.keyValuePairs.delete(key);
-                console.log(`Deleted ${key}`);
-              } catch (error) {
-                console.error(`Error deleting ${key}:`, error);
               }
             }
   
@@ -85,7 +73,6 @@ GM_addStyle(`
                       let parsedData = jsonData ? JSON.parse(jsonData) : {};
                       let [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
                       let jsDate = new Date(`${year}-${month}-${day}`);
-                      console.log(day, month, year, asin, jsDate, parsedData.date);
                       try {
                           parsedData.date = jsDate.toISOString();
                       } catch (error) {
@@ -177,50 +164,41 @@ GM_addStyle(`
                       document.getElementById('load-xlsx-info').addEventListener('click', loadXLSXInfo);
                       const list = await load_all_asin_etv_values_from_storage();
                       userlog(`nothing loaded yet. ${list.length} items in database`);
-  
-                      createPieChart(list);
-                      createETVplots(list);
-                      createCancellationRatioTable(list);
+                      createYearlyBreakdown(list);
   
                   }, 200);
               }
   
-  async function createETVplots(list) {
+  async function createYearlyBreakdown(list) {
       const sortedItems = list.map(item => ({
           ...item,
           date: new Date(item.date)
       })).sort((a, b) => a.date - b.date);
   
-      const taxYears = new Set();
+      const years = [...new Set(sortedItems.map(item => item.date.getFullYear()))];
   
-      sortedItems.forEach(item => {
-          const sixMonthsLater = new Date(item.date);
-          sixMonthsLater.setMonth(item.date.getMonth());
-          const taxYear = sixMonthsLater.getFullYear();
-          taxYears.add(taxYear);
-      });
+      const container = document.getElementById('vvp-tax-information-container');
   
-      const sortedTaxYears = Array.from(taxYears).sort((a, b) => a - b);
-      const last5TaxYears = sortedTaxYears.slice(-5);
+      years.forEach(year => {
+          const yearContainer = document.createElement('div');
+          yearContainer.id = `year-container-${year}`;
+          yearContainer.style.border = '1px solid #ccc';
+          yearContainer.style.padding = '10px';
+          yearContainer.style.marginBottom = '20px';
   
-      last5TaxYears.forEach(year => {
-          const { start, end } = getTaxYearRange(year);
-          const filteredItems = sortedItems.filter(item => {
-              return item.date.getFullYear() == year;
-          });
-        console.log("now createing plot for", year);
-        createETVPlot(year, filteredItems, end);
+          const title = document.createElement('h3');
+          title.textContent = `Year ${year}`;
+          yearContainer.appendChild(title);
+          container.appendChild(yearContainer);
+  
+          const yearlyItems = sortedItems.filter(item => item.date.getFullYear() === year);
+          createPieChart(yearlyItems, yearContainer);
+          createETVPlot(year, yearlyItems, new Date(year, 11, 30), yearContainer); // Assuming end of year for plot
+          createCancellationRatioTable(yearlyItems, yearContainer);
       });
   }
   
-  function getTaxYearRange(year) {
-      return {
-          start: new Date(year, 0, 0),
-          end: new Date(year, 11, 30)
-      };
-  }
-  
-  async function createETVPlot(taxYear, items, endDate) {
+  async function createETVPlot(taxYear, items, endDate, parentElement) {
       const width = 600, height = 400;
       const dataByDateMap = new Map();
       let currentEtv = 0;
@@ -262,11 +240,11 @@ GM_addStyle(`
       const data = [historicalTrace, projectionTrace];
   
       const layout = {
-          title: `Tax Year ${taxYear}`,
+          title: `ETV over Time`,
           xaxis: {
               title: 'Date',
               tickformat: '%b %d',
-              range: [new Date(taxYear, 1, 1), endDate],
+              range: [new Date(taxYear, 0, 0), endDate],
               tickangle: -45
           },
           yaxis: {
@@ -279,20 +257,19 @@ GM_addStyle(`
               b: 80,
               l: 60
           },
-        width: "30%",
+        width: "80%",
         height: "30%"
       };
   
       const containerId = `plot-container-${taxYear}`;
       const newDiv = document.createElement('div');
       newDiv.id = containerId;
-      newDiv.className = 'plot-container';
-      document.getElementById('vvp-tax-information-container').appendChild(newDiv);
+      parentElement.appendChild(newDiv);
   
       Plotly.newPlot(containerId, data, layout);
   }
   
-  function createPieChart(list) {
+  function createPieChart(list, parentElement) {
           const priceCounts = list.reduce((acc, item) => {
               if (item.etv === 0) {
                   acc.zero += 1;
@@ -307,10 +284,10 @@ GM_addStyle(`
               { category: 'TAX', count: priceCounts.nonZero }
           ];
   
-          const width = 400, height = 400, margin = 40;
+          const width = 300, height = 300, margin = 40;
           const radius = Math.min(width, height) / 2 - margin;
   
-          const svg = d3.select('#vvp-tax-information-container').append('svg')
+          const svg = d3.select(parentElement).append('svg')
               .attr('width', width)
               .attr('height', height)
               .append('g')
@@ -382,7 +359,6 @@ GM_addStyle(`
                       const elements = order.querySelectorAll(".vvp-orders-table--text-col");
                       const orderElement = Array.from(elements).find(el => el.hasAttribute("data-order-timestamp"));
                       if (orderElement) {
-                        const orderDate2 = orderElement.innerHTML.trim();
                         console.log(orderElement);
                       } else {
                         console.log('Element with data-order-timestamp not found');
@@ -578,17 +554,13 @@ GM_addStyle(`
       }
   }
   
-  async function createCancellationRatioTable(list) {
+  async function createCancellationRatioTable(list, parentElement) {
       const yearlyData = {};
       const cancelledAsins = await getValue("cancellations", []);
   console.log(cancelledAsins);
       list.forEach(item => {
   
-          const year = item.date.slice(0, 4);
-  
-          if (year==="xxx"){
-            console.log(item);
-          }
+          const year = item.date.year;
   
           if (!yearlyData[year]) {
               yearlyData[year] = { orders: 0, cancellations: 0 };
@@ -614,10 +586,7 @@ GM_addStyle(`
   
       tableData.sort((a, b) => a.year - b.year);
   
-      const container = d3.select('#vvp-tax-information-container');
-      container.select('table').remove();
-  
-      const table = container.append('table').attr('class', 'cancellation-ratio-table');
+      const table = d3.select(parentElement).append('table').attr('class', 'cancellation-ratio-table');
       const thead = table.append('thead');
       thead.append('tr')
           .selectAll('th')
@@ -653,7 +622,7 @@ GM_addStyle(`
           </style>
       `;
   
-      container.append('div').html(tableStyles);
+      d3.select(parentElement).append('div').html(tableStyles);
   
   }
   
