@@ -261,117 +261,118 @@ GM_addStyle(`
   }
 
   async function createETVPlot(taxYear, items, endDate, parentElement) {
-      const cancelledAsins = await getValue("cancellations", []);
-      const filteredItems = items.filter(item => !cancelledAsins.includes(item.ASIN));
+    const cancelledAsins = await getValue("cancellations", []);
+    // Filter out items with etv === 0
+    const filteredItems = items.filter(item => !cancelledAsins.includes(item.ASIN) && item.etv > 0);
 
-      const width = 600, height = 400;
-      const dataByDateMap = new Map();
-      let currentEtv = 0;
-      filteredItems.forEach(d => {
-          const dateKey = d.date.toISOString().split('T')[0];
-          currentEtv += d.etv;
-          dataByDateMap.set(dateKey, currentEtv);
-      });
+    const width = 600, height = 400;
+    const dataByDateMap = new Map();
+    let currentEtv = 0;
+    filteredItems.forEach(d => {
+        const dateKey = d.date.toISOString().split('T')[0];
+        currentEtv += d.etv;
+        dataByDateMap.set(dateKey, currentEtv);
+    });
 
-      const dataByDate = Array.from(dataByDateMap, ([date, etv]) => ({ date: new Date(date), etv }));
+    const dataByDate = Array.from(dataByDateMap, ([date, etv]) => ({ date: new Date(date), etv }));
 
-      const historicalTrace = {
-          x: dataByDate.map(d => d.date),
-          y: dataByDate.map(d => d.etv),
-          mode: 'lines',
-          type: 'scatter',
-          name: 'Historical ETV',
-          line: { color: 'steelblue' }
-      };
+    const historicalTrace = {
+        x: dataByDate.map(d => d.date),
+        y: dataByDate.map(d => d.etv),
+        mode: 'lines',
+        type: 'scatter',
+        name: 'Historical ETV',
+        line: { color: 'steelblue' }
+    };
 
-      const firstPoint = dataByDate[0];
-      const lastPoint = dataByDate[dataByDate.length - 1];
-      const projectedEtv = lastPoint.etv + (lastPoint.etv - firstPoint.etv) * ((endDate - lastPoint.date) / (lastPoint.date - firstPoint.date));
+    const firstPoint = dataByDate[0];
+    const lastPoint = dataByDate[dataByDate.length - 1];
+    const projectedEtv = lastPoint.etv + (lastPoint.etv - firstPoint.etv) * ((endDate - lastPoint.date) / (lastPoint.date - firstPoint.date));
 
-      const projectionData = [
-          { date: firstPoint.date, etv: firstPoint.etv },
-          { date: endDate, etv: projectedEtv }
-      ];
+    const projectionData = [
+        { date: firstPoint.date, etv: firstPoint.etv },
+        { date: endDate, etv: projectedEtv }
+    ];
 
-      const projectionTrace = {
-          x: projectionData.map(d => d.date),
-          y: projectionData.map(d => d.etv),
-          mode: 'lines',
-          type: 'scatter',
-          name: 'Projected ETV',
-          line: { color: 'orange', dash: 'dash' }
-      };
+    const projectionTrace = {
+        x: projectionData.map(d => d.date),
+        y: projectionData.map(d => d.etv),
+        mode: 'lines',
+        type: 'scatter',
+        name: 'Projected ETV',
+        line: { color: 'orange', dash: 'dash' }
+    };
 
-      const data = [historicalTrace, projectionTrace];
+    const data = [historicalTrace, projectionTrace];
 
-      // Add teilwert curves
-      const itemsWithTeilwert = filteredItems.filter(item => item.teilwert != null);
-      if (itemsWithTeilwert.length >= 10) {
-          const teilwertEtvRatios = itemsWithTeilwert.map(item => {
-              if (item.teilwert === null || isNaN(item.teilwert) || item.teilwert < 0) {
-                  console.log("Invalid teilwert found:", item);
-              }
-              if (item.etv <= 0 || isNaN(item.etv)) {
-                  console.log("Invalid etv found:", item);
-              }
-              return item.teilwert / item.etv;
-          });
-          const validRatios = teilwertEtvRatios.filter(ratio => !isNaN(ratio)); // Filter out NaN values
-          if (validRatios.length > 0) {
-              const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
+    // Add teilwert curves
+    const itemsWithTeilwert = filteredItems.filter(item => item.teilwert != null);
+    if (itemsWithTeilwert.length >= 10) {
+        const teilwertEtvRatios = itemsWithTeilwert.map(item => {
+            if (item.teilwert === null || isNaN(item.teilwert) || item.teilwert < 0) {
+                console.log("Invalid teilwert found:", item);
+            }
+            if (item.etv <= 0 || isNaN(item.etv)) {
+                console.log("Invalid etv found:", item);
+            }
+            return item.teilwert / item.etv;
+        });
+        const validRatios = teilwertEtvRatios.filter(ratio => !isNaN(ratio)); // Filter out NaN values
+        if (validRatios.length > 0) {
+            const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
 
-              if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5) {
-                  const teilwertDataMap = new Map();
-                  let currentTeilwert = 0;
-                  filteredItems.forEach(d => {
-                      const dateKey = d.date.toISOString().split('T')[0];
-                      currentTeilwert += (d.teilwert != null ? d.teilwert : (d.etv * avgTeilwertEtvRatio));
-                      teilwertDataMap.set(dateKey, currentTeilwert);
-                  });
-                  const teilwertData = Array.from(teilwertDataMap, ([date, teilwert]) => ({ date: new Date(date), teilwert }));
+            if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5) {
+                const teilwertDataMap = new Map();
+                let currentTeilwert = 0;
+                filteredItems.forEach(d => {
+                    const dateKey = d.date.toISOString().split('T')[0];
+                    currentTeilwert += (d.teilwert != null ? d.teilwert : (d.etv * avgTeilwertEtvRatio));
+                    teilwertDataMap.set(dateKey, currentTeilwert);
+                });
+                const teilwertData = Array.from(teilwertDataMap, ([date, teilwert]) => ({ date: new Date(date), teilwert }));
 
-                  const teilwertTrace = {
-                      x: teilwertData.map(d => d.date),
-                      y: teilwertData.map(d => d.teilwert),
-                      mode: 'lines',
-                      type: 'scatter',
-                      name: 'Historical + Estimated Teilwert',
-                      line: { color: 'green' }
-                  };
-                  data.push(teilwertTrace);
-              }
-          }
-      }
+                const teilwertTrace = {
+                    x: teilwertData.map(d => d.date),
+                    y: teilwertData.map(d => d.teilwert),
+                    mode: 'lines',
+                    type: 'scatter',
+                    name: 'Historical + Estimated Teilwert',
+                    line: { color: 'green' }
+                };
+                data.push(teilwertTrace);
+            }
+        }
+    }
 
-      const layout = {
-          title: `ETV and Teilwert over Time`,
-          xaxis: {
-              title: 'Date',
-              tickformat: '%b %d',
-              range: [new Date(taxYear, 0, 0), endDate],
-              tickangle: -45
-          },
-          yaxis: {
-              title: 'Value',
-              autorange: true
-          },
-          margin: {
-              t: 40,
-              r: 30,
-              b: 80,
-              l: 60
-          },
-        width: "80%",
-        height: "30%"
-      };
+    const layout = {
+        title: `ETV and Teilwert over Time`,
+        xaxis: {
+            title: 'Date',
+            tickformat: '%b %d',
+            range: [new Date(taxYear, 0, 0), endDate],
+            tickangle: -45
+        },
+        yaxis: {
+            title: 'Value',
+            autorange: true
+        },
+        margin: {
+            t: 40,
+            r: 30,
+            b: 80,
+            l: 60
+        },
+      width: "80%",
+      height: "30%"
+    };
 
-      const containerId = `plot-container-${taxYear}`;
-      const newDiv = document.createElement('div');
-      newDiv.id = containerId;
-      parentElement.appendChild(newDiv);
+    const containerId = `plot-container-${taxYear}`;
+    const newDiv = document.createElement('div');
+    newDiv.id = containerId;
+    parentElement.appendChild(newDiv);
 
-      Plotly.newPlot(containerId, data, layout);
-  }
+    Plotly.newPlot(containerId, data, layout);
+}
 
   async function createPieChart(list, parentElement) {
       const cancelledAsins = await getValue("cancellations", []);
