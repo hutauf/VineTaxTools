@@ -374,89 +374,90 @@ GM_addStyle(`
     Plotly.newPlot(containerId, data, layout);
 }
 
-  async function createPieChart(list, parentElement) {
-      const cancelledAsins = await getValue("cancellations", []);
+async function createPieChart(list, parentElement) {
+    const cancelledAsins = await getValue("cancellations", []);
 
-      const counts = list.reduce((acc, item) => {
-          if (cancelledAsins.includes(item.ASIN)) {
-              acc.cancellations += 1;
-          } else if (item.etv === 0) {
-              acc.tax0 += 1;
-          } else if (item.teilwert != null) {
-              acc.teilwertAvailable += 1;
-          } else {
-              acc.teilwertMissing += 1;
-          }
-          return acc;
-      }, { cancellations: 0, tax0: 0, teilwertAvailable: 0, teilwertMissing: 0 });
+    const counts = list.reduce((acc, item) => {
+        if (cancelledAsins.includes(item.ASIN)) {
+            acc.cancellations += 1;
+        } else if (item.etv === 0) {
+            acc.tax0 += 1;
+        } else if (item.teilwert != null) {
+            acc.teilwertAvailable += 1;
+        } else {
+            acc.teilwertMissing += 1;
+        }
+        return acc;
+    }, { cancellations: 0, tax0: 0, teilwertAvailable: 0, teilwertMissing: 0 });
 
-      const data = [
-          { category: 'Cancellations', count: counts.cancellations },
-          { category: 'tax0', count: counts.tax0 },
-          { category: 'Teilwert Available', count: counts.teilwertAvailable },
-          { category: 'Teilwert Missing', count: counts.teilwertMissing }
-      ];
+    const data = [
+        { category: 'Cancellations', count: counts.cancellations },
+        { category: 'tax0', count: counts.tax0 },
+        { category: 'Teilwert Available', count: counts.teilwertAvailable },
+        { category: 'Teilwert Missing', count: counts.teilwertMissing }
+    ];
 
-      const width = 300, height = 300, margin = 40;
-      const radius = Math.min(width, height) / 2 - margin;
+    const width = 600, height = 300, margin = 40;
+    const radius = Math.min(width, height) / 2 - margin;
 
-      const svg = d3.select(parentElement).append('svg')
-          .attr('width', width)
-          .attr('height', height)
-          .append('g')
-          .attr('transform', `translate(${width / 2}, ${height / 2})`);
+    const svg = d3.select(parentElement).append('svg')
+        .attr('width', width)
+        .attr('height', height)
+        .append('g')
+        .attr('transform', `translate(${width / 2}, ${height / 2})`);
 
-      const pie = d3.pie().value(d => d.count);
-      const arc = d3.arc().outerRadius(radius).innerRadius(0);
-      const outerArc = d3.arc().innerRadius(radius * 0.9).outerRadius(radius * 0.9);
+    const pie = d3.pie().value(d => d.count);
+    const arc = d3.arc().outerRadius(radius).innerRadius(0);
+    const outerArc = d3.arc().innerRadius(radius * 0.8).outerRadius(radius * 0.8); // Adjusted inner radius
 
-      const color = d3.scaleOrdinal()
-          .domain(data.map(d => d.category))
-          .range(['#808080', '#ff9999', '#66b3ff', '#99ff99']);
+    const color = d3.scaleOrdinal()
+        .domain(data.map(d => d.category))
+        .range(['#808080', '#ff9999', '#66b3ff', '#99ff99']);
 
-      svg.selectAll('slices')
-          .data(pie(data))
-          .enter().append('path')
-          .attr('d', arc)
-          .attr('fill', d => color(d.data.category))
-          .attr('stroke', 'white')
-          .style('stroke-width', '2px');
+    svg.selectAll('slices')
+        .data(pie(data))
+        .enter().append('path')
+        .attr('d', arc)
+        .attr('fill', d => color(d.data.category))
+        .attr('stroke', 'white')
+        .style('stroke-width', '2px');
 
-      // Add labels with connecting lines
-      svg.selectAll('labels')
-          .data(pie(data))
-          .enter()
-          .append('text')
-          .attr('dy', '.35em')
-          .attr('transform', d => {
-              const pos = outerArc.centroid(d);
-              pos[0] = radius * (midAngle(d) < Math.PI ? 1 : -1);
-              return `translate(${pos})`;
-          })
-          .style('text-anchor', d => (midAngle(d)) < Math.PI ? 'start' : 'end')
-          .text(d => `${d.data.category}: ${d.data.count}`);
+    // Add labels with connecting lines
+    svg.selectAll('labels')
+        .data(pie(data))
+        .enter()
+        .append('text')
+        .attr('dy', '.35em')
+        .attr('transform', d => {
+            const pos = outerArc.centroid(d);
+            const midAngleValue = midAngle(d);
+            pos[0] = radius * (midAngleValue < Math.PI ? 1 : -1);
+            return `translate(${pos})`;
+        })
+        .style('text-anchor', d => (midAngle(d)) < Math.PI ? 'start' : 'end')
+        .text(d => `${d.data.category}: ${d.data.count}`);
 
-      // Add polylines between chart and labels
-      svg.selectAll('lines')
-          .data(pie(data))
-          .enter()
-          .append('polyline')
-          .attr('stroke', 'black')
-          .style('fill', 'none')
-          .attr('stroke-width', 1)
-          .attr('points', d => {
-              const posA = arc.centroid(d);
-              const posB = outerArc.centroid(d);
-              const posC = outerArc.centroid(d);
-              posC[0] = radius * 0.95 * (midAngle(d) < Math.PI ? 1 : -1);
-              return [posA, posB, posC];
-          });
+    // Add polylines between chart and labels
+    svg.selectAll('lines')
+        .data(pie(data))
+        .enter()
+        .append('polyline')
+        .attr('stroke', 'black')
+        .style('fill', 'none')
+        .attr('stroke-width', 1)
+        .attr('points', d => {
+            const posA = arc.centroid(d);
+            const posB = outerArc.centroid(d);
+            const midAngleValue = midAngle(d);
+            const posC = outerArc.centroid(d);
+            posC[0] = radius * 0.9 * (midAngleValue < Math.PI ? 1 : -1);
+            return [posA, posB, posC];
+        });
 
-      function midAngle(d) {
-          return d.startAngle + (d.endAngle - d.startAngle) / 2;
-      }
-  }
-
+    function midAngle(d) {
+        return d.startAngle + (d.endAngle - d.startAngle) / 2;
+    }
+}
   async function createTeilwertSummaryTable(list, parentElement) {
       const cancelledAsins = await getValue("cancellations", []);
       const filteredList = list.filter(item => !cancelledAsins.includes(item.ASIN));
