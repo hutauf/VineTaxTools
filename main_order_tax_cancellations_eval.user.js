@@ -113,8 +113,8 @@ GM_addStyle(`
                                       const responseData = JSON.parse(response.responseText);
                                       if (responseData.existing_asins) {
                                           for (const existingAsin of responseData.existing_asins) {
-                                            window.progressBar.setText("upload successful, updating local data now (" + (responseData.existingAsins.indexOf(existingAsin) + 1) + "/" + responseData.existing_asins.length + ")");
-                                            window.progressBar.setFillWidth(((responseData.existingAsins.indexOf(existingAsin) + 1) / responseData.existing_asins.length) * 100);
+                                            window.progressBar.setText("upload successful, updating local data now (" + (responseData.existing_asins.indexOf(existingAsin) + 1) + "/" + responseData.existing_asins.length + ")");
+                                            window.progressBar.setFillWidth(((responseData.existing_asins.indexOf(existingAsin) + 1) / responseData.existing_asins.length) * 100);
                                             const asinKey = `ASIN_${existingAsin.asin}`;
                                                await setValue(asinKey, JSON.stringify({
                                                   ...JSON.parse(await getValue(asinKey) || '{}') ,
