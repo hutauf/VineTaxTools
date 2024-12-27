@@ -198,20 +198,117 @@ GM_addStyle(`
                 };
               }
 
-              function createUI_taxextractor() {
+              async function createUI_taxextractor() {
                   const container = document.querySelector('#vvp-tax-information-responsive-container');
                   const progressBar = createSimpleProgressBar(container);
                   window.progressBar = progressBar;
                   progressBar.setText('Loading...');
                   const div = document.createElement('div');
                   div.innerHTML = `
-          <div id="vine-data-extractor" style="margin-top: 20px;">
-              <button id="load-xlsx-info" class="">Load XLSX Info</button>
-              <button id="show-all-data">Show All Data</button>
-              <div id="status" style="margin-top: 10px;">nothing loaded yet</div>
-          </div>
-      `;
-                  container.appendChild(div);
+                    <div id="vine-data-extractor" style="margin-top: 20px; width: fit-content;">
+                        <button id="load-xlsx-info" class="">Load XLSX Info</button>
+                        <button id="show-all-data">Show All Data</button>
+                        <button id="export-db">Export DB</button>
+                        <button id="import-db">Import DB</button>
+                         <div id="status" style="margin-top: 10px;">nothing loaded yet</div>
+                    </div>
+                `;
+                        const settings = await getValue("settings", {
+                            cancellations: false,
+                            tax0: false,
+                            yearFilter: "show all years",
+                            streuartikelregelung: true,
+                            streuartikelregelungTeilwert: true
+                        });
+
+                        const settingsDiv = document.createElement('div');
+                        settingsDiv.innerHTML = `
+                            <div style="margin-top: 10px; width: fit-content; border: 1px solid black; padding: 10px;">
+                                <label><input type="checkbox" id="cancellations" ${settings.cancellations ? 'checked' : ''}> Cancellations</label>
+                                <label><input type="checkbox" id="tax0" ${settings.tax0 ? 'checked' : ''}> Tax0</label>
+                                <label><input type="checkbox" id="streuartikelregelung" ${settings.streuartikelregelung ? 'checked' : ''}> Streuartikelregelung anwenden</label>
+                                <label><input type="checkbox" id="streuartikelregelungTeilwert" ${settings.streuartikelregelungTeilwert ? 'checked' : ''}> Streuartikelregelung auf Teilwert vor 10/2024</label>
+                                <select id="yearFilter">
+                                    <option value="show all years" ${settings.yearFilter === "show all years" ? 'selected' : ''}>Show all years</option>
+                                    <option value="only 2023" ${settings.yearFilter === "only 2023" ? 'selected' : ''}>Only 2023</option>
+                                    <option value="only 2024" ${settings.yearFilter === "only 2024" ? 'selected' : ''}>Only 2024</option>
+                                    <option value="only 2025" ${settings.yearFilter === "only 2025" ? 'selected' : ''}>Only 2025</option>
+                                </select>
+                            </div>
+                        `;
+
+                        div.appendChild(settingsDiv);
+                        container.appendChild(div);
+
+                        document.getElementById('cancellations').addEventListener('change', async (event) => {
+                            settings.cancellations = event.target.checked;
+                            await setValue("settings", settings);
+                        });
+
+                        document.getElementById('tax0').addEventListener('change', async (event) => {
+                            settings.tax0 = event.target.checked;
+                            await setValue("settings", settings);
+                        });
+
+                        document.getElementById('streuartikelregelung').addEventListener('change', async (event) => {
+                            settings.streuartikelregelung = event.target.checked;
+                            await setValue("settings", settings);
+                        });
+
+                        document.getElementById('streuartikelregelungTeilwert').addEventListener('change', async (event) => {
+                            settings.streuartikelregelungTeilwert = event.target.checked;
+                            await setValue("settings", settings);
+                        });
+
+                        document.getElementById('yearFilter').addEventListener('change', async (event) => {
+                            settings.yearFilter = event.target.value;
+                            await setValue("settings", settings);
+                        });
+                       
+
+
+                document.getElementById('export-db').addEventListener('click', async () => {
+                    const keys = await listValues();
+                    const data = {};
+                    for (const key of keys) {
+                        data[key] = await getValue(key);
+                    }
+                    const json = JSON.stringify(data, null, 2);
+                    const blob = new Blob([json], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'database.json';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                });
+
+                document.getElementById('import-db').addEventListener('click', () => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = 'application/json';
+                    input.addEventListener('change', async (event) => {
+                        const file = event.target.files[0];
+                        if (file) {
+                            const reader = new FileReader();
+                            reader.onload = async (e) => {
+                                try {
+                                    const json = JSON.parse(e.target.result);
+                                    for (const key in json) {
+                                        await setValue(key, json[key]);
+                                    }
+                                    alert('Database imported successfully.');
+                                } catch (error) {
+                                    console.error('Error importing database:', error);
+                                    alert('Failed to import database.');
+                                }
+                            };
+                            reader.readAsText(file);
+                        }
+                    });
+                    input.click();
+                });
+                  
 
                   const containerfordata = document.getElementById('vvp-tax-information-container');
                 const divdata = document.createElement('div');
@@ -241,6 +338,17 @@ GM_addStyle(`
       const container = document.getElementById('vvp-tax-information-container');
 
       years.forEach(async year => {
+
+        const settings = await getValue("settings", {
+            yearFilter: "show all years",
+            streuartikelregelung: true,
+            streuartikelregelungTeilwert: true
+        });
+
+        if (settings.yearFilter !== "show all years" && settings.yearFilter !== `only ${year}`) {
+            return;
+        }
+
           const yearContainer = document.createElement('div');
           yearContainer.id = `year-container-${year}`;
           yearContainer.style.border = '1px solid #ccc';
@@ -460,7 +568,24 @@ async function createPieChart(list, parentElement) {
 }
   async function createTeilwertSummaryTable(list, parentElement) {
       const cancelledAsins = await getValue("cancellations", []);
-      const filteredList = list.filter(item => !cancelledAsins.includes(item.ASIN));
+      let filteredList = list.filter(item => !cancelledAsins.includes(item.ASIN));
+
+    const settings = await getValue("settings", {
+        streuartikelregelung: true,
+        streuartikelregelungTeilwert: true
+    });
+
+    if (settings.streuartikelregelung) {
+        filteredList = filteredList.filter(item => item.etv > 11.90);
+    }
+
+    if (settings.streuartikelregelungTeilwert) {
+        filteredList = filteredList.filter(item => {
+            const orderDate = new Date(item.date);
+            return (orderDate >= new Date(2024, 9, 1) || item.teilwert > 11.90);
+        });
+    }
+
 
       const itemsWithTeilwert = filteredList.filter(item => item.teilwert != null);
       const itemsWithoutTeilwert = filteredList.filter(item => item.teilwert == null && item.etv > 0);
@@ -672,6 +797,7 @@ async function createPieChart(list, parentElement) {
                           if (!cancellations.includes(asin)) {
                               cancellations.push(asin);
                               setValue('cancellations', cancellations);
+                              continue;
                           }
                       }
 
@@ -682,8 +808,6 @@ async function createPieChart(list, parentElement) {
                               date: orderDate,
                               etv: etv
                           };
-                      } else {
-                          data[asin].etv += etv;
                       }
                   }
 
@@ -757,7 +881,31 @@ async function createPieChart(list, parentElement) {
       dataTableDiv.innerHTML = '<p>Loading data...</p>';
 
       try {
-          const asinData = await load_all_asin_etv_values_from_storage();
+          let asinData = await load_all_asin_etv_values_from_storage();
+
+        const settings = await getValue("settings", {
+            cancellations: false,
+            tax0: false,
+            yearFilter: "show all years"
+        });
+
+        let cancellations = await getValue('cancellations', []);
+
+        const filteredData = asinData.filter(item => {
+            const itemYear = new Date(item.date).getFullYear();
+            if (settings.yearFilter !== "show all years" && settings.yearFilter !== `only ${itemYear}`) {
+                return false;
+            }
+            if ((!settings.cancellations) && cancellations.includes(item.ASIN)) {
+                return false;
+            }
+            if ((!settings.tax0) && item.etv == 0) {
+                return false;
+            }
+            return true;
+        });
+
+        asinData = filteredData;
 
           if (asinData.length === 0) {
               dataTableDiv.innerHTML = '<p>No data found.</p>';
@@ -785,9 +933,9 @@ async function createPieChart(list, parentElement) {
                           <td>${item.ASIN}</td>
                           <td>${item.date || 'N/A'}</td>
                           <td>${item.name || 'N/A'}</td>
-                          <td>${item.etv || 'N/A'}</td>
-                          <td>${item.keepa != null ? item.keepa : 'N/A'}</td>
-                          <td>${item.teilwert != null ? item.teilwert : 'N/A'}</td>
+                          <td>${item.etv}</td>
+                          <td>${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${item.ASIN}" target="_blank">${item.keepa}</a>` : 'N/A'}</td>
+                          <td data-order="${item.teilwert != null ? item.teilwert : 0}">${item.teilwert != null ? item.teilwert : 'N/A'}</td>
                           <td>${item.pdf ? `<a href="${item.pdf}" target="_blank">PDF Link</a>` : 'N/A'}</td>
                           <td><a href="https://www.amazon.de/dp/${item.ASIN}" target="_blank">Product Link</a></td>
                           <td><a href="https://www.amazon.de/review/create-review?encoding=UTF&asin=${item.ASIN}" target="_blank">Review Link</a></td>
@@ -889,7 +1037,7 @@ async function createPieChart(list, parentElement) {
               var currentPageURL = window.location.href;
 
               if (currentPageURL === "https://www.amazon.de/vine/account") {
-                  window.addEventListener('load', function() {
+                  window.addEventListener('load', async function() {
                     createUI_taxextractor();
                     });
               } else if (currentPageURL.includes("https://www.amazon.de/vine/orders")) {
