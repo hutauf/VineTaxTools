@@ -10,6 +10,7 @@
 // @require     https://cdn.plot.ly/plotly-latest.min.js
 // @require     https://code.jquery.com/jquery-3.5.1.js
 // @require     https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js
+// @require     https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js
 // @grant       GM_setValue
 // @grant       GM_addStyle
 // @grant       GM_getValue
@@ -210,6 +211,8 @@ GM_addStyle(`
                         <button id="show-all-data">Show All Data</button>
                         <button id="export-db">Export DB</button>
                         <button id="import-db">Import DB</button>
+                        <button id="create-pdf">Create PDF</button>
+
                          <div id="status" style="margin-top: 10px;">nothing loaded yet</div>
                     </div>
                 `;
@@ -264,7 +267,7 @@ GM_addStyle(`
                             settings.yearFilter = event.target.value;
                             await setValue("settings", settings);
                         });
-                       
+
 
 
                 document.getElementById('export-db').addEventListener('click', async () => {
@@ -308,7 +311,7 @@ GM_addStyle(`
                     });
                     input.click();
                 });
-                  
+
 
                   const containerfordata = document.getElementById('vvp-tax-information-container');
                 const divdata = document.createElement('div');
@@ -320,6 +323,7 @@ GM_addStyle(`
                   setTimeout(async () => {
                       document.getElementById('load-xlsx-info').addEventListener('click', loadXLSXInfo);
                       document.getElementById('show-all-data').addEventListener('click', showAllData);
+                      document.getElementById('create-pdf').addEventListener('click', createPDF);
                       const list = await load_all_asin_etv_values_from_storage();
                       userlog(`nothing loaded yet. ${list.length} items in database`);
                       createYearlyBreakdown(list);
@@ -874,6 +878,113 @@ async function createPieChart(list, parentElement) {
           document.getElementById('show-all-data').addEventListener('click', showAllData);
           loadOrdersInfo();
       }, 200);
+  }
+
+
+    // Fetch a PDF using GM_xmlHttpRequest
+    function fetchPDF(url) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url,
+                responseType: 'arraybuffer',
+                onload: (response) => resolve(new Uint8Array(response.response)),
+                onerror: (err) => reject(err),
+            });
+        });
+    }
+
+    function loadScript(url) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url,
+                onload: function(response) {
+                    if (response.status >= 200 && response.status < 300) {
+                        try {
+                            // Execute the script in a new function scope to avoid polluting the global scope
+                            let module = { exports: {} };
+                            let exports = module.exports; // For compatibility with some UMD modules
+                            eval(response.responseText);
+                            resolve(module.exports); // Resolve with the module's exports
+                        } catch (error) {
+                            reject("Error evaluating script: " + error);
+                        }
+                    } else {
+                        reject("Error loading script: " + response.status + " " + response.statusText);
+                    }
+                },
+                onerror: function(error) {
+                    reject("Network error: " + error);
+                }
+            });
+        });
+    }
+
+
+  async function createPDF() {
+      const pdfLib = await loadScript('https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js');
+
+      // Now you can use pdfLib
+      const { PDFDocument, rgb, StandardFonts } = pdfLib;
+
+    let asinData = await load_all_asin_etv_values_from_storage();
+
+    const settings = await getValue("settings", {
+        cancellations: false,
+        tax0: false,
+        yearFilter: "show all years"
+    });
+
+    let cancellations = await getValue('cancellations', []);
+
+    const filteredData = asinData.filter(item => {
+        const itemYear = new Date(item.date).getFullYear();
+        if (settings.yearFilter !== "show all years" && settings.yearFilter !== `only ${itemYear}`) {
+            return false;
+        }
+        if ((!settings.cancellations) && cancellations.includes(item.ASIN)) {
+            return false;
+        }
+        if ((!settings.tax0) && item.etv == 0) {
+            return false;
+        }
+        return true;
+    });
+
+    //TODO remove slicing
+    asinData = filteredData.slice(0, 5); // Modify as needed to control behavior
+
+        // Create a new PDF document
+        const newPdf = await PDFDocument.create();
+
+        // Add a placeholder page
+        const placeholderPage = newPdf.addPage([600, 400]);
+        placeholderPage.drawText('Placeholder Page', { x: 50, y: 350, size: 20 });
+
+
+        // Fetch and merge PDFs
+        for (const item of asinData) {
+            try {
+                const pdfBytes = await fetchPDF(item.pdf);
+                const externalPdf = await PDFDocument.load(pdfBytes);
+                const externalPages = await newPdf.copyPages(externalPdf, externalPdf.getPageIndices());
+                externalPages.forEach((page) => newPdf.addPage(page));
+            } catch (err) {
+                console.error(`Failed to fetch or merge PDF from ${item.pdf}:`, err);
+            }
+        }
+
+
+        // Serialize and download the merged PDF
+        const finalPdfBytes = await newPdf.save();
+        const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = 'merged-document.pdf';
+        link.click();
+
+
   }
 
   async function showAllData() {
