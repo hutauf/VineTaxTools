@@ -280,7 +280,7 @@ GM_addStyle(`
                             settings.add2ndhalf2023to2024 = event.target.checked;
                             await setValue("settings", settings);
                         });
-                        
+
 
 
 
@@ -393,7 +393,7 @@ GM_addStyle(`
           }
           await createPieChart(yearlyItems, yearContainer);
           let target_date = new Date(year, 11, 31);
-          if (year === 2023) {
+          if (year === 2023 && settings.add2ndhalf2023to2024) {
               target_date = new Date(year, 5, 30);
           }
           await createETVPlot(year, yearlyItems, target_date, yearContainer); // Assuming end of year for plot
