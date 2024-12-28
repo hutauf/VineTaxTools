@@ -59,7 +59,7 @@ GM_addStyle(`
                   return etv;
               }
 
-              async function load_all_asin_etv_values_from_storage() {
+              async function load_all_asin_etv_values_from_storage(upload = true) {
                   window.progressBar.setText('Loading data from storage...');
                   let keys = await listValues();
                   let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
@@ -94,6 +94,8 @@ GM_addStyle(`
                           ETV: parsedData.etv
                       });
                   };
+
+                  if (upload) {
                     window.progressBar.setText("uploading anonymized data to server now");
                     window.progressBar.setFillWidth(0);
                     for (let i = 1; i < 10; i++) {
@@ -133,12 +135,13 @@ GM_addStyle(`
                               } else {
                                   console.error("Failed to send data to the server:", response.statusText);
                               }
-                              window.progressBar.destroy();
+                              window.progressBar.hide();
                           },
                       onerror: function(error) {
                           console.error("Error sending data to the server:", error);
                       }
                   });
+                  }
 
                   return asinData;
               }
@@ -193,8 +196,11 @@ GM_addStyle(`
                   setText: (text) => {
                     progressText.innerText = text;
                   },
-                  destroy: () => {
-                    container.removeChild(progressBarContainer);
+                  hide: () => {
+                    progressBarContainer.style.display = 'none';
+                  },
+                  show: () => {
+                    progressBarContainer.style.display = 'flex';
                   }
                 };
               }
@@ -221,7 +227,8 @@ GM_addStyle(`
                             tax0: false,
                             yearFilter: "show all years",
                             streuartikelregelung: true,
-                            streuartikelregelungTeilwert: true
+                            streuartikelregelungTeilwert: true,
+                            add2ndhalf2023to2024: true
                         });
 
                         const settingsDiv = document.createElement('div');
@@ -231,6 +238,7 @@ GM_addStyle(`
                                 <label><input type="checkbox" id="tax0" ${settings.tax0 ? 'checked' : ''}> Tax0</label>
                                 <label><input type="checkbox" id="streuartikelregelung" ${settings.streuartikelregelung ? 'checked' : ''}> Streuartikelregelung anwenden</label>
                                 <label><input type="checkbox" id="streuartikelregelungTeilwert" ${settings.streuartikelregelungTeilwert ? 'checked' : ''}> Streuartikelregelung auf Teilwert vor 10/2024</label>
+                                <label><input type="checkbox" id="add2ndhalf2023to2024" ${settings.add2ndhalf2023to2024 ? 'checked' : ''}> 2. Jahreshälfte 2023 in 2024 versteuern</label>
                                 <select id="yearFilter">
                                     <option value="show all years" ${settings.yearFilter === "show all years" ? 'selected' : ''}>Show all years</option>
                                     <option value="only 2023" ${settings.yearFilter === "only 2023" ? 'selected' : ''}>Only 2023</option>
@@ -267,6 +275,12 @@ GM_addStyle(`
                             settings.yearFilter = event.target.value;
                             await setValue("settings", settings);
                         });
+
+                        document.getElementById('add2ndhalf2023to2024').addEventListener('change', async (event) => {
+                            settings.add2ndhalf2023to2024 = event.target.checked;
+                            await setValue("settings", settings);
+                        });
+                        
 
 
 
@@ -346,7 +360,8 @@ GM_addStyle(`
         const settings = await getValue("settings", {
             yearFilter: "show all years",
             streuartikelregelung: true,
-            streuartikelregelungTeilwert: true
+            streuartikelregelungTeilwert: true,
+            add2ndhalf2023to2024: true
         });
 
         if (settings.yearFilter !== "show all years" && settings.yearFilter !== `only ${year}`) {
@@ -364,9 +379,24 @@ GM_addStyle(`
           yearContainer.appendChild(title);
           container.appendChild(yearContainer);
 
-          const yearlyItems = sortedItems.filter(item => item.date.getFullYear() === year);
+          let yearlyItems;
+          if (settings.add2ndhalf2023to2024) {
+              if (year === 2023) {
+                  yearlyItems = sortedItems.filter(item => item.date.getFullYear() === year && item.date.getMonth() < 6);
+              } else if (year === 2024) {
+                  yearlyItems = sortedItems.filter(item => (item.date.getFullYear() === year) || (item.date.getFullYear() === 2023 && item.date.getMonth() >= 6));
+              } else {
+                  yearlyItems = sortedItems.filter(item => item.date.getFullYear() === year);
+              }
+          } else {
+              yearlyItems = sortedItems.filter(item => item.date.getFullYear() === year);
+          }
           await createPieChart(yearlyItems, yearContainer);
-          await createETVPlot(year, yearlyItems, new Date(year, 11, 30), yearContainer); // Assuming end of year for plot
+          let target_date = new Date(year, 11, 31);
+          if (year === 2023) {
+              target_date = new Date(year, 5, 30);
+          }
+          await createETVPlot(year, yearlyItems, target_date, yearContainer); // Assuming end of year for plot
           await createCancellationRatioTable(yearlyItems, yearContainer);
           await createTeilwertSummaryTable(yearlyItems, yearContainer);
       });
@@ -461,7 +491,7 @@ GM_addStyle(`
         xaxis: {
             title: 'Date',
             tickformat: '%b %d',
-            range: [new Date(taxYear, 0, 0), endDate],
+            range: [firstPoint.date, endDate],
             tickangle: -45
         },
         yaxis: {
@@ -474,8 +504,8 @@ GM_addStyle(`
             b: 80,
             l: 60
         },
-      width: "80%",
-      height: "30%"
+        width: "80%",
+        height: "30%"
     };
 
     const containerId = `plot-container-${taxYear}`;
@@ -928,7 +958,7 @@ async function createPieChart(list, parentElement) {
       // Now you can use pdfLib
       const { PDFDocument, rgb, StandardFonts } = pdfLib;
 
-    let asinData = await load_all_asin_etv_values_from_storage();
+    let asinData = await load_all_asin_etv_values_from_storage(false);
 
     const settings = await getValue("settings", {
         cancellations: false,
@@ -953,7 +983,7 @@ async function createPieChart(list, parentElement) {
     });
 
     //TODO remove slicing
-    asinData = filteredData.slice(0, 5); // Modify as needed to control behavior
+    asinData = filteredData.slice(0, 15); // Modify as needed to control behavior
 
         // Create a new PDF document
         const newPdf = await PDFDocument.create();
@@ -964,26 +994,30 @@ async function createPieChart(list, parentElement) {
 
 
         // Fetch and merge PDFs
+        window.progressBar.show()
+        window.progressBar.setText("downloading pdfs...")
+        window.progressBar.setFillWidth(0)
         for (const item of asinData) {
             try {
                 const pdfBytes = await fetchPDF(item.pdf);
                 const externalPdf = await PDFDocument.load(pdfBytes);
                 const externalPages = await newPdf.copyPages(externalPdf, externalPdf.getPageIndices());
                 externalPages.forEach((page) => newPdf.addPage(page));
+                window.progressBar.setText("downloading pdfs... ${asinData.indexOf(item) + 1} / ${asinData.length}")
+                window.progressBar.setFillWidth(asinData.indexOf(item) / asinData.length * 100)
             } catch (err) {
                 console.error(`Failed to fetch or merge PDF from ${item.pdf}:`, err);
             }
         }
-
-
+        
         // Serialize and download the merged PDF
         const finalPdfBytes = await newPdf.save();
         const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
         link.download = 'merged-document.pdf';
+        window.progressBar.hide()
         link.click();
-
 
   }
 
@@ -992,7 +1026,7 @@ async function createPieChart(list, parentElement) {
       dataTableDiv.innerHTML = '<p>Loading data...</p>';
 
       try {
-          let asinData = await load_all_asin_etv_values_from_storage();
+          let asinData = await load_all_asin_etv_values_from_storage(false);
 
         const settings = await getValue("settings", {
             cancellations: false,
