@@ -565,36 +565,30 @@ async function createPieChart(list, parentElement) {
         .style('stroke-width', '2px');
 
     // Add labels with connecting lines
+    const labelPositions = [
+        { x: radius + 20, y: -radius + 20 },
+        { x: radius + 20, y: -radius + 40 },
+        { x: radius + 20, y: -radius + 60 },
+        { x: radius + 20, y: -radius + 80 }
+    ];
     svg.selectAll('labels')
         .data(pie(data))
         .enter()
         .append('text')
         .attr('dy', '.35em')
-        .attr('transform', d => {
-            const pos = outerArc.centroid(d);
-            const midAngleValue = midAngle(d);
-            pos[0] = radius * (midAngleValue < Math.PI ? 1 : -1);
-            return `translate(${pos})`;
-        })
-        .style('text-anchor', d => (midAngle(d)) < Math.PI ? 'start' : 'end')
+        .attr('transform', (d, i) => `translate(${labelPositions[i].x + 20}, ${labelPositions[i].y})`)
+        .style('text-anchor', 'start')
         .text(d => `${d.data.category}: ${d.data.count}`);
 
-    // Add polylines between chart and labels
-    svg.selectAll('lines')
+    svg.selectAll('squares')
         .data(pie(data))
         .enter()
-        .append('polyline')
-        .attr('stroke', 'black')
-        .style('fill', 'none')
-        .attr('stroke-width', 1)
-        .attr('points', d => {
-            const posA = arc.centroid(d);
-            const posB = outerArc.centroid(d);
-            const midAngleValue = midAngle(d);
-            const posC = outerArc.centroid(d);
-            posC[0] = radius * 0.9 * (midAngleValue < Math.PI ? 1 : -1);
-            return [posA, posB, posC];
-        });
+        .append('rect')
+        .attr('x', (d, i) => labelPositions[i].x)
+        .attr('y', (d, i) => labelPositions[i].y - 7)
+        .attr('width', 10)
+        .attr('height', 10)
+        .attr('fill', d => color(d.data.category));
 
     function midAngle(d) {
         return d.startAngle + (d.endAngle - d.startAngle) / 2;
