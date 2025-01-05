@@ -239,6 +239,7 @@ GM_addStyle(`
                                 <label><input type="checkbox" id="streuartikelregelung" ${settings.streuartikelregelung ? 'checked' : ''}> Streuartikelregelung anwenden</label>
                                 <label><input type="checkbox" id="streuartikelregelungTeilwert" ${settings.streuartikelregelungTeilwert ? 'checked' : ''}> Streuartikelregelung auf Teilwert vor 10/2024</label>
                                 <label><input type="checkbox" id="add2ndhalf2023to2024" ${settings.add2ndhalf2023to2024 ? 'checked' : ''}> 2. Jahreshälfte 2023 in 2024 versteuern</label>
+                                <label><input type="checkbox" id="einnahmezumteilwert" ${settings.einnahmezumteilwert ? 'checked' : ''}> EÜR: Einnahme zum Teilwert vor 10/2024</label>
                                 <select id="yearFilter">
                                     <option value="show all years" ${settings.yearFilter === "show all years" ? 'selected' : ''}>Show all years</option>
                                     <option value="only 2023" ${settings.yearFilter === "only 2023" ? 'selected' : ''}>Only 2023</option>
@@ -451,13 +452,14 @@ GM_addStyle(`
     const itemsWithTeilwert = filteredItems.filter(item => item.teilwert != null);
     if (itemsWithTeilwert.length >= 10) {
         const teilwertEtvRatios = itemsWithTeilwert.map(item => {
-            if (item.teilwert === null || isNaN(item.teilwert) || item.teilwert < 0) {
+            let use_teilwert = item.myteilwert || item.teilwert;
+            if (use_teilwert === null || isNaN(use_teilwert) || use_teilwert < 0) {
                 console.log("Invalid teilwert found:", item);
             }
             if (item.etv <= 0 || isNaN(item.etv)) {
                 console.log("Invalid etv found:", item);
             }
-            return item.teilwert / item.etv;
+            return use_teilwert / item.etv;
         });
         const validRatios = teilwertEtvRatios.filter(ratio => !isNaN(ratio)); // Filter out NaN values
         if (validRatios.length > 0) {
@@ -468,7 +470,8 @@ GM_addStyle(`
                 let currentTeilwert = 0;
                 filteredItems.forEach(d => {
                     const dateKey = d.date.toISOString().split('T')[0];
-                    currentTeilwert += (d.teilwert != null ? d.teilwert : (d.etv * avgTeilwertEtvRatio));
+                    let use_teilwert = d.myteilwert || d.teilwert;
+                    currentTeilwert += (use_teilwert != null ? use_teilwert : (d.etv * avgTeilwertEtvRatio));
                     teilwertDataMap.set(dateKey, currentTeilwert);
                 });
                 const teilwertData = Array.from(teilwertDataMap, ([date, teilwert]) => ({ date: new Date(date), teilwert }));
@@ -520,11 +523,12 @@ async function createPieChart(list, parentElement) {
     const cancelledAsins = await getValue("cancellations", []);
 
     const counts = list.reduce((acc, item) => {
+        let use_teilwert = item.myteilwert || item.teilwert;
         if (cancelledAsins.includes(item.ASIN)) {
             acc.cancellations += 1;
         } else if (item.etv === 0) {
             acc.tax0 += 1;
-        } else if (item.teilwert != null) {
+        } else if (use_teilwert != null) {
             acc.teilwertAvailable += 1;
         } else {
             acc.teilwertMissing += 1;
@@ -610,30 +614,33 @@ async function createPieChart(list, parentElement) {
     if (settings.streuartikelregelungTeilwert) {
         filteredList = filteredList.filter(item => {
             const orderDate = new Date(item.date);
-            return (orderDate >= new Date(2024, 9, 1) || item.teilwert > 11.90);
+            let use_teilwert = item.myteilwert || item.teilwert;
+            return (orderDate >= new Date(2024, 9, 1) || use_teilwert > 11.90);
         });
     }
 
-
-      const itemsWithTeilwert = filteredList.filter(item => item.teilwert != null);
-      const itemsWithoutTeilwert = filteredList.filter(item => item.teilwert == null && item.etv > 0);
+    
+      const itemsWithTeilwert = filteredList.filter(item => item.myteilwert != null || item.teilwert != null);
+      const itemsWithoutTeilwert = filteredList.filter(item => (item.myteilwert == null && item.teilwert == null) && item.etv > 0);
 
       if (itemsWithTeilwert.length >= 10) {
           const teilwertEtvRatios = itemsWithTeilwert.map(item => {
-              if (item.teilwert === null || isNaN(item.teilwert) || item.teilwert < 0) {
+              let use_teilwert = item.myteilwert || item.teilwert;
+              if (use_teilwert === null || isNaN(use_teilwert) || use_teilwert < 0) {
                   console.log("Invalid teilwert found in createTeilwertSummaryTable:", item);
               }
               if (item.etv <= 0 || isNaN(item.etv)) {
                   console.log("Invalid etv found in createTeilwertSummaryTable:", item);
               }
-              return item.teilwert / item.etv;
+              return use_teilwert / item.etv;
           });
           const validRatios = teilwertEtvRatios.filter(ratio => !isNaN(ratio));
           if (validRatios.length > 0) {
               const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
 
               if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5 && itemsWithoutTeilwert.length > 0) {
-                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + item.teilwert, 0);
+                  let use_teilwert = item.myteilwert || item.teilwert;
+                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + use_teilwert, 0);
                   const estimatedTeilwert = itemsWithoutTeilwert.reduce((sum, item) => sum + (item.etv * avgTeilwertEtvRatio), 0);
                   const overallTeilwert = totalTeilwert + estimatedTeilwert;
 
@@ -676,7 +683,7 @@ async function createPieChart(list, parentElement) {
                   d3.select(parentElement).append('div').html(tableStyles);
 
               } else if (itemsWithoutTeilwert.length === 0) {
-                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + item.teilwert, 0);
+                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + (item.myteilwert || item.teilwert), 0);
                   const table = d3.select(parentElement).append('table').attr('class', 'teilwert-summary-table');
                   const thead = table.append('thead');
                   thead.append('tr').selectAll('th')
