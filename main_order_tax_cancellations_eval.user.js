@@ -283,6 +283,10 @@ GM_addStyle(`
                             await setValue("settings", settings);
                         });
 
+                        document.getElementById('einnahmezumteilwert').addEventListener('change', async (event) => {
+                            settings.einnahmezumteilwert = event.target.checked;
+                            await setValue("settings", settings);
+                        });
 
 
 
@@ -720,6 +724,86 @@ async function createPieChart(list, parentElement) {
                       </style>
                   `;
                   d3.select(parentElement).append('div').html(tableStyles);
+
+                const euerData = {
+                    einnahmen: 0,
+                    ausgaben: 0,
+                    entnahmen: 0
+                };
+
+                const teilwertEtvRatios = itemsWithTeilwert.map(item => {
+                    let use_teilwert = item.myteilwert || item.teilwert;
+                    return use_teilwert / item.etv;
+                });
+                const avgTeilwertEtvRatio = teilwertEtvRatios.reduce((sum, ratio) => sum + ratio, 0) / teilwertEtvRatios.length;
+
+                filteredList.forEach(item => {
+                    let use_teilwert = item.myteilwert || item.teilwert || (item.etv * avgTeilwertEtvRatio);
+                    if (item.storniert) return;
+
+                    const itemDate = new Date(item.date);
+                    const cutoffDate = new Date(2024, 9, 1);
+
+                    if (itemDate < cutoffDate) {
+                        if (settings.einnahmezumteilwert) {
+                            euerData.einnahmen += use_teilwert;
+                            euerData.ausgaben += use_teilwert;
+                        } else {
+                            euerData.einnahmen += item.etv;
+                            euerData.ausgaben += item.etv;
+                        }
+                    }
+
+                    if (item.entsorgt || item.lager || item.betriebsausgabe) return;
+
+                    if (item.verkauft) {
+                        euerData.einnahmen += use_teilwert;
+                    } else {
+                        euerData.entnahmen += use_teilwert;
+                    }
+                });
+
+                const gewinn = euerData.einnahmen - euerData.ausgaben + euerData.entnahmen;
+
+                const euerTable = d3.select(parentElement).append('table').attr('class', 'euer-summary-table');
+                const euerThead = euerTable.append('thead');
+                euerThead.append('tr').selectAll('th')
+                    .data(['EÜR', 'Euro'])
+                    .enter().append('th').text(d => d);
+
+                const euerTbody = euerTable.append('tbody');
+                const euerRows = [
+                    { label: 'Einnahmen', value: euerData.einnahmen.toFixed(2) },
+                    { label: 'Ausgaben', value: euerData.ausgaben.toFixed(2) },
+                    { label: 'Entnahmen', value: euerData.entnahmen.toFixed(2) },
+                    { label: 'Gewinn', value: gewinn.toFixed(2) }
+                ];
+                euerRows.forEach(row => {
+                    const tr = euerTbody.append('tr');
+                    tr.append('td').text(row.label);
+                    tr.append('td').text(row.value);
+                });
+
+                const euerTableStyles = `
+                    <style>
+                        .euer-summary-table {
+                            width: 80%;
+                            border-collapse: collapse;
+                            margin-top: 10px;
+                        }
+                        .euer-summary-table th, .euer-summary-table td {
+                            border: 1px solid #ddd;
+                            padding: 8px;
+                            text-align: left;
+                        }
+                        .euer-summary-table th {
+                            background-color: #f2f2f2;
+                            font-weight: bold;
+                        }
+                    </style>
+                `;
+                d3.select(parentElement).append('div').html(euerTableStyles);
+
               } else {
                   parentElement.append(document.createTextNode("Not enough data to reliably estimate total Teilwert."));
               }
@@ -761,7 +845,7 @@ async function createPieChart(list, parentElement) {
                   const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
                   console.log(json);
                   const extractedData = await extractData(json);
-                  saveData(extractedData);
+                  await saveData(extractedData);
               }
 
               function parseOrdersTable() {
@@ -850,10 +934,12 @@ async function createPieChart(list, parentElement) {
                   return data;
               }
 
-              function saveData(data) {
+              async function saveData(data) {
                   for (const asin in data) {
                       const key = `ASIN_${asin}`;
-                      setValue(key, JSON.stringify(data[asin]));
+                      const existingData = await getValue(key);
+                      const updatedData = existingData ? { ...JSON.parse(existingData), ...data[asin] } : data[asin];
+                      setValue(key, JSON.stringify(updatedData));
                   }
               }
 
@@ -880,7 +966,7 @@ async function createPieChart(list, parentElement) {
 
                   try {
                       const jsonData = parseOrdersTable();
-                      saveData(jsonData);
+                      await saveData(jsonData);
 
                       const status = document.getElementById('status');
                       status.textContent = `Extraction successful. Number of items: ${Object.keys(jsonData).length}`;
