@@ -1121,6 +1121,12 @@ async function createPieChart(list, parentElement) {
 
 
         function showTeilwertPopup(item) {
+
+            let existingOverlay = document.getElementById('teilwert-overlay');
+            if (existingOverlay) {
+                existingOverlay.remove();
+            }
+
             const asin = item.ASIN;
         
             const overlay = document.createElement('div');
@@ -1138,6 +1144,11 @@ async function createPieChart(list, parentElement) {
             const closeButton = document.createElement('button');
             closeButton.textContent = 'Close';
             closeButton.style.float = 'right';
+            setTimeout(() => {
+            closeButton.onclick = () => {
+                document.getElementById("teilwert-overlay").remove();
+            };
+            }, 100);
             overlay.appendChild(closeButton);
         
             const info = `
@@ -1188,8 +1199,6 @@ async function createPieChart(list, parentElement) {
                     await setValue(`ASIN_${asin}`, JSON.stringify(updatedItem));
                 }
             });
-            closeButton.addEventListener('click', () => document.body.removeChild(document.getElementById('teilwert-overlay')));
-
         
         }
 
