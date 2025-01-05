@@ -1088,7 +1088,9 @@ async function createPieChart(list, parentElement) {
                           <td>${item.name || 'N/A'}</td>
                           <td>${item.etv}</td>
                           <td>${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${item.ASIN}" target="_blank">${item.keepa}</a>` : 'N/A'}</td>
-                          <td data-order="${item.teilwert != null ? item.teilwert : 0}">${item.teilwert != null ? item.teilwert : 'N/A'}</td>
+                          <td data-order="${item.myteilwert != null ? item.myteilwert : (item.teilwert != null ? item.teilwert : 0)}">
+                              ${item.myteilwert != null ? `${item.myteilwert}<sup>m</sup>` : (item.teilwert != null ? item.teilwert : 'N/A')}
+                          </td>
                           <td>${item.pdf ? `<a href="${item.pdf}" target="_blank">PDF Link</a>` : 'N/A'}</td>
                           <td><a href="https://www.amazon.de/dp/${item.ASIN}" target="_blank">Product Link</a></td>
                           <td><a href="https://www.amazon.de/review/create-review?encoding=UTF&asin=${item.ASIN}" target="_blank">Review Link</a></td>
