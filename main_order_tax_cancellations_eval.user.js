@@ -26,6 +26,7 @@ GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
   `);
 
+
   (async function() {
       'use strict';
 
@@ -1095,8 +1096,10 @@ async function createPieChart(list, parentElement) {
                           <td>${item.name || 'N/A'}</td>
                           <td>${item.etv}</td>
                           <td>${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${item.ASIN}" target="_blank">${item.keepa}</a>` : 'N/A'}</td>
-                          <td data-order="${item.myteilwert != null ? item.myteilwert : (item.teilwert != null ? item.teilwert : 0)}">
-                              ${item.myteilwert != null ? `${item.myteilwert}<sup>m</sup>` : (item.teilwert != null ? item.teilwert : 'N/A')}
+                          <td id="teilwert_for_asin_${item.ASIN}" data-order="${item.myteilwert != null ? item.myteilwert : (item.teilwert != null ? item.teilwert : 0)}">
+                              <a href="javascript:void(0);">
+                                  ${item.myteilwert != null ? `${item.myteilwert}<sup>m</sup>` : (item.teilwert != null ? item.teilwert : 'N/A')}
+                              </a>
                           </td>
                           <td>${item.pdf ? `<a href="${item.pdf}" target="_blank">PDF Link</a>` : 'N/A'}</td>
                           <td><a href="https://www.amazon.de/dp/${item.ASIN}" target="_blank">Product Link</a></td>
@@ -1116,10 +1119,93 @@ async function createPieChart(list, parentElement) {
 
         window.progressBar.hide();
 
+
+        function showTeilwertPopup(item) {
+            const asin = item.ASIN;
+        
+            const overlay = document.createElement('div');
+            overlay.style.position = 'fixed';
+            overlay.style.top = '50%';
+            overlay.style.left = '50%';
+            overlay.style.transform = 'translate(-50%, -50%)';
+            overlay.style.backgroundColor = 'white';
+            overlay.style.border = '1px solid black';
+            overlay.style.padding = '20px';
+            overlay.style.zIndex = '1000';
+            overlay.style.width = '300px';
+            overlay.id = 'teilwert-overlay';
+        
+            const closeButton = document.createElement('button');
+            closeButton.textContent = 'Close';
+            closeButton.style.float = 'right';
+            overlay.appendChild(closeButton);
+        
+            const info = `
+                <p>Name: ${item.name}</p>
+                <p>ASIN: ${item.ASIN}</p>
+                <p>Date: ${item.date.split('T')[0]}</p>
+                <p>ETV: ${item.etv}</p>
+                <p>Keepa: ${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${item.ASIN}" target="_blank">${item.keepa}</a>` : 'N/A'}</p>
+                <p>Teilwert: ${item.teilwert != null ? item.teilwert : 'N/A'}</p>
+                <p>Product Link: <a href="https://www.amazon.de/dp/${item.ASIN}" target="_blank">Link</a></p>
+                <p>PDF Link: ${item.pdf ? `<a href="${item.pdf}" target="_blank">Link</a>` : 'N/A'}</p>
+                <p>Angepasster Teilwert: <input type="text" id="angepasster-teilwert" value="${item.myteilwert != null ? item.myteilwert : ''}"></p>
+            `;
+            overlay.innerHTML += info;
+        
+            document.body.appendChild(overlay);
+
+            const checkboxes = [
+                { id: 'verkauft', label: 'Verkauft' },
+                { id: 'lager', label: 'Lager' },
+                { id: 'entsorgt', label: 'Entsorgt' },
+                { id: 'storniert', label: 'Storniert' },
+                { id: 'betriebsausgabe', label: 'Betriebsausgabe' }
+            ];
+        
+            checkboxes.forEach(checkbox => {
+                const isChecked = item[checkbox.id] === true;
+                const checkboxElement = document.createElement('div');
+                checkboxElement.innerHTML = `
+                    <label>
+                        <input type="checkbox" id="${checkbox.id}" ${isChecked ? 'checked' : ''}> ${checkbox.label}
+                    </label>
+                `;
+                overlay.appendChild(checkboxElement);
+        
+                document.getElementById(checkbox.id).addEventListener('change', async (event) => {
+                    const updatedItem = JSON.parse(await getValue(`ASIN_${asin}`));
+                    updatedItem[checkbox.id] = event.target.checked;
+                    await setValue(`ASIN_${asin}`, JSON.stringify(updatedItem));
+                });
+            });
+        
+            document.getElementById('angepasster-teilwert').addEventListener('change', async (event) => {
+                const value = parseFloat(event.target.value.replace(',', '.'));
+                if (!isNaN(value)) {
+                    const updatedItem = JSON.parse(await getValue(`ASIN_${asin}`));
+                    updatedItem.myteilwert = value;
+                    await setValue(`ASIN_${asin}`, JSON.stringify(updatedItem));
+                }
+            });
+            closeButton.addEventListener('click', () => document.body.removeChild(document.getElementById('teilwert-overlay')));
+
+        
+        }
+
+        asinData.forEach(item => {
+            const element = document.getElementById(`teilwert_for_asin_${item.ASIN}`);
+            if (element) {
+                element.addEventListener('click', () => showTeilwertPopup(item));
+            }
+        });
+
       } catch (error) {
           dataTableDiv.innerHTML = `<p>Error loading data: ${error.message}</p>`;
       }
   }
+
+
 
   async function createCancellationRatioTable(list, parentElement) {
       const yearlyData = {};
