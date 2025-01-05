@@ -983,6 +983,7 @@ async function createPieChart(list, parentElement) {
     });
 
     //TODO remove slicing
+    alert("This feature is currently in beta. Only the first 15 elements will be included in the report.");
     asinData = filteredData.slice(0, 15); // Modify as needed to control behavior
 
         // Create a new PDF document
