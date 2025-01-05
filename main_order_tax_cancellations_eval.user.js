@@ -876,6 +876,7 @@ async function createPieChart(list, parentElement) {
 
                       const status = document.getElementById('status');
                       status.textContent = `Extraction successful. Number of items: ${Object.keys(jsonData).length}`;
+                      window.progressBar.hide();
                   } catch (error) {
                       console.error('Error loading order info:', error);
                       const status = document.getElementById('status');
@@ -885,7 +886,8 @@ async function createPieChart(list, parentElement) {
 
   function createUIorderpage() {
       const container = document.querySelector('.a-normal.vvp-orders-table');
-
+      const progressBar = createSimpleProgressBar(container.parentNode);
+      window.progressBar = progressBar;
       const div = document.createElement('div');
       div.innerHTML = `
           <div id="vine-data-extractor" style="margin-top: 20px;">
@@ -1026,21 +1028,32 @@ async function createPieChart(list, parentElement) {
         const settings = await getValue("settings", {
             cancellations: false,
             tax0: false,
-            yearFilter: "show all years"
+            yearFilter: "show all years",
+            add2ndhalf2023to2024: true
         });
 
         let cancellations = await getValue('cancellations', []);
-
         const filteredData = asinData.filter(item => {
             const itemYear = new Date(item.date).getFullYear();
-            if (settings.yearFilter !== "show all years" && settings.yearFilter !== `only ${itemYear}`) {
+            const itemMonth = new Date(item.date).getMonth();
+            if (settings.yearFilter !== "show all years") {
+            if (settings.yearFilter === "only 2023" && settings.add2ndhalf2023to2024) {
+                if (!(itemYear === 2023 && itemMonth < 6)) {
                 return false;
+                }
+            } else if (settings.yearFilter === "only 2024" && settings.add2ndhalf2023to2024) {
+                if (!(itemYear === 2024 || (itemYear === 2023 && itemMonth >= 6))) {
+                return false;
+                }
+            } else if (settings.yearFilter !== `only ${itemYear}`) {
+                return false;
+            }
             }
             if ((!settings.cancellations) && cancellations.includes(item.ASIN)) {
-                return false;
+            return false;
             }
             if ((!settings.tax0) && item.etv == 0) {
-                return false;
+            return false;
             }
             return true;
         });
@@ -1071,7 +1084,7 @@ async function createPieChart(list, parentElement) {
           asinData.forEach(item => {
               table += `<tr>
                           <td>${item.ASIN}</td>
-                          <td>${item.date || 'N/A'}</td>
+                          <td style="white-space: nowrap;">${item.date ? item.date.split('T')[0] : 'N/A'}</td>
                           <td>${item.name || 'N/A'}</td>
                           <td>${item.etv}</td>
                           <td>${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${item.ASIN}" target="_blank">${item.keepa}</a>` : 'N/A'}</td>
@@ -1091,6 +1104,8 @@ async function createPieChart(list, parentElement) {
                    lengthMenu: [10, 25, 50, 100, 1000000]
                });
             });
+
+        window.progressBar.hide();
 
       } catch (error) {
           dataTableDiv.innerHTML = `<p>Error loading data: ${error.message}</p>`;
