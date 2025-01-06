@@ -309,6 +309,12 @@ GM_addStyle(`
                             await setValue("settings", settings);
                         });
 
+                        document.getElementById('teilwertschaetzungenzurpdf').addEventListener('change', async (event) => {
+                            settings.teilwertschaetzungenzurpdf = event.target.checked;
+                            await setValue("settings", settings);
+                        });
+                        
+
 
 
                 document.getElementById('export-db').addEventListener('click', async () => {
