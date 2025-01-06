@@ -764,14 +764,12 @@ async function createPieChart(list, parentElement) {
                     const itemDate = new Date(item.date);
                     const cutoffDate = new Date(2024, 9, 1);
 
-                    if (itemDate < cutoffDate) {
-                        if (settings.einnahmezumteilwert) {
-                            euerData.einnahmen += use_teilwert;
-                            euerData.ausgaben += use_teilwert;
-                        } else {
-                            euerData.einnahmen += item.etv;
-                            euerData.ausgaben += item.etv;
-                        }
+                    if (settings.einnahmezumteilwert && itemDate < cutoffDate) {
+                        euerData.einnahmen += use_teilwert;
+                        euerData.ausgaben += use_teilwert;
+                    } else {
+                        euerData.einnahmen += item.etv;
+                        euerData.ausgaben += item.etv;
                     }
 
                     if (item.entsorgt || item.lager || item.betriebsausgabe) return;
