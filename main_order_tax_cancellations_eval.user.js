@@ -261,6 +261,7 @@ GM_addStyle(`
                                 <label><input type="checkbox" id="streuartikelregelungTeilwert" ${settings.streuartikelregelungTeilwert ? 'checked' : ''}> Streuartikelregelung auf Teilwert vor 10/2024</label>
                                 <label><input type="checkbox" id="add2ndhalf2023to2024" ${settings.add2ndhalf2023to2024 ? 'checked' : ''}> 2. Jahreshälfte 2023 in 2024 versteuern</label>
                                 <label><input type="checkbox" id="einnahmezumteilwert" ${settings.einnahmezumteilwert ? 'checked' : ''}> EÜR: Einnahme zum Teilwert vor 10/2024</label>
+                                <label><input type="checkbox" id="teilwertschaetzungenzurpdf" ${settings.teilwertschaetzungenzurpdf ? 'checked' : ''}> Teilwertschätzungen der PDF hinzufügen</label>
                                 <select id="yearFilter">
                                     <option value="show all years" ${settings.yearFilter === "show all years" ? 'selected' : ''}>Show all years</option>
                                     <option value="only 2023" ${settings.yearFilter === "only 2023" ? 'selected' : ''}>Only 2023</option>
@@ -1071,7 +1072,8 @@ async function createPieChart(list, parentElement) {
     const settings = await getValue("settings", {
         cancellations: false,
         tax0: false,
-        yearFilter: "show all years"
+        yearFilter: "show all years",
+        teilwertschaetzungenzurpdf: true,
     });
 
     let cancellations = await getValue('cancellations', []);
@@ -1091,31 +1093,72 @@ async function createPieChart(list, parentElement) {
     });
 
     //TODO remove slicing
-    alert("This feature is currently in beta. Only the first 15 elements will be included in the report.");
-    asinData = filteredData.slice(0, 15); // Modify as needed to control behavior
+    asinData = filteredData
 
-        // Create a new PDF document
+    // Create a new PDF document
         const newPdf = await PDFDocument.create();
 
         // Add a placeholder page
-        const placeholderPage = newPdf.addPage([600, 400]);
-        placeholderPage.drawText('Placeholder Page', { x: 50, y: 350, size: 20 });
+        const deckblattPage = newPdf.addPage([600, 800]);
+        const { width, height } = deckblattPage.getSize();
+        const fontSize = 12;
+        const margin = 50;
+
+        let text = `
+            Einleitung zur Versteuerung von Amazon Vine
+            ------------------------------------------
+            Amazon Vine ist ein Produkttestprogramm, bei dem ausgewählte Tester Produkte kostenlos erhalten, um diese zu bewerten. Die erhaltenen Produkte dürfen behalten werden und sind daher als Betriebsausgaben zu sehen, da Amazon Erfahrungen aus erster Hand fordert.
+
+            Referenzen:
+            1. Finanzministerium des Landes Schleswig-Holstein v. 02.07.2024 - VI 3010 - S 2240 - 190 / Ertragsteuerrechtliche Behandlung von digital agierenden Steuerpflichtigen (Influencer) https://datenbank.nwb.de/Dokument/1051855/
+            2. Bundesfinanzhof Urteil vom 21. April 2010, X R 43/08 https://www.bundesfinanzhof.de/de/entscheidung/entscheidungen-online/detail/STRE201050388/
+            3. Bundesfinanzhof Urteil vom 18. 8. 2005 – VI R 32/03 https://lexetius.com/2005,2218
+
+            `;
+
+
+            if (settings.add2ndhalf2023to2024) {
+                text += `
+                Die Produkte aus der 2. Jahreshälfte 2023 sind erst in 2024 zu versteuern, da das wirtschaftliche Eigentum dann erst auf den Produkttester übergegangen ist (§39 AO).
+                `;
+            }
+            if (settings.einnahmezumteilwert) {
+                text += `
+                Da sich Amazon bis Oktober 2024 ein Rückforderungsrecht vorgehalten hat, erfolgte der wirtschaftliche Eigentumsübergang erst nach 6 Monaten nach Erhalt des Produkts, dann zum Zeitwert des Produkts (gemeiner Wert). Die Einnahme des Produkts wurde daher entsprechend bewertet (§9 und §10 BewG, §39 AO, §8 EStG).
+                `;
+            }
+            if (settings.streuartikelregelung) {
+                text += `
+                Sogenannte Streuwerbeartikel bzw. geringwertige Warenproben werden auf Basis des BMF-Schreibens vom 19.5.2015 (Az. IV C 6 -S 2297-b/14/10001) nicht in die Berechnung mit einbezogen.
+                `;
+            }
+
+
+        deckblattPage.drawText(text, {
+            x: margin,
+            y: height - margin - fontSize,
+            size: fontSize,
+            lineHeight: 1.5*fontSize,
+            maxWidth: width - 2 * margin
+        });
 
 
         // Fetch and merge PDFs
-        window.progressBar.show()
-        window.progressBar.setText("downloading pdfs...")
-        window.progressBar.setFillWidth(0)
-        for (const item of asinData) {
-            try {
-                const pdfBytes = await fetchPDF(item.pdf);
-                const externalPdf = await PDFDocument.load(pdfBytes);
-                const externalPages = await newPdf.copyPages(externalPdf, externalPdf.getPageIndices());
-                externalPages.forEach((page) => newPdf.addPage(page));
-                window.progressBar.setText("downloading pdfs... ${asinData.indexOf(item) + 1} / ${asinData.length}")
-                window.progressBar.setFillWidth(asinData.indexOf(item) / asinData.length * 100)
-            } catch (err) {
-                console.error(`Failed to fetch or merge PDF from ${item.pdf}:`, err);
+        if (settings.teilwertschaetzungenzurpdf) {
+            window.progressBar.show()
+            window.progressBar.setText("downloading pdfs...")
+            window.progressBar.setFillWidth(0)
+            for (const item of asinData) {
+                try {
+                    const pdfBytes = await fetchPDF(item.pdf);
+                    const externalPdf = await PDFDocument.load(pdfBytes);
+                    const externalPages = await newPdf.copyPages(externalPdf, externalPdf.getPageIndices());
+                    externalPages.forEach((page) => newPdf.addPage(page));
+                    window.progressBar.setText(`downloading pdfs... ${asinData.indexOf(item) + 1} / ${asinData.length}`)
+                    window.progressBar.setFillWidth(asinData.indexOf(item) / asinData.length * 100)
+                } catch (err) {
+                    console.error(`Failed to fetch or merge PDF from ${item.pdf}:`, err);
+                }
             }
         }
         
