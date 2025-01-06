@@ -44,6 +44,23 @@ GM_addStyle(`
               return result ? result.value : defaultValue;
             }
 
+            async function getAllAsinValues() {
+                try {
+                    const allValues = await db.keyValuePairs.toArray();
+                    const asinValues = allValues.filter(item => item.key.startsWith("ASIN_"));
+                    const asinDict = asinValues.reduce((acc, item) => {
+                        acc[item.key] = item.value;
+                        return acc;
+                    }, {});
+                    console.log(asinDict);
+                    return asinDict;
+                } catch (error) {
+                    console.error("Error getting ASIN values:", error);
+                    return [];
+                }
+            }
+
+
             async function listValues() {
               try {
                 return (await db.keyValuePairs.toCollection().primaryKeys());
@@ -66,6 +83,8 @@ GM_addStyle(`
                   let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
                   console.log(asinKeys.length)
 
+                  let asinDataAll = await getAllAsinValues();
+
                   let asinData = [];
                   let tempDataToSend = [];
 
@@ -73,7 +92,8 @@ GM_addStyle(`
                       let asin = asinKey.replace("ASIN_", "");
                       window.progressBar.setText(`Loading data for ASIN ${asin}... (${asinKeys.indexOf(asinKey) + 1}/${asinKeys.length})`);
                       window.progressBar.setFillWidth(((asinKeys.indexOf(asinKey) + 1) / asinKeys.length) * 100);
-                      let jsonData = await getValue(asinKey);
+                      
+                      let jsonData = asinDataAll[asinKey]; //await getValue(asinKey);
 
                       let parsedData = jsonData ? JSON.parse(jsonData) : {};
                       let [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
@@ -1113,6 +1133,19 @@ async function createPieChart(list, parentElement) {
   }
 
   async function showAllData() {
+    document.addEventListener('click', function(event) {
+        console.log("click detected");
+        const overlay = document.getElementById('teilwert-overlay');
+        if (overlay && !overlay.contains(event.target)) {
+            const spawnDate = overlay.getAttribute('data-spawn-date');
+            const currentTime = new Date().getTime();
+            if (currentTime - spawnDate > 300) {
+                overlay.remove();
+            }
+        }
+    });
+
+
       const dataTableDiv = document.getElementById('data-table');
       dataTableDiv.innerHTML = '<p>Loading data...</p>';
 
@@ -1226,16 +1259,8 @@ async function createPieChart(list, parentElement) {
             overlay.style.zIndex = '1000';
             overlay.style.width = '300px';
             overlay.id = 'teilwert-overlay';
+            overlay.setAttribute('data-spawn-date', new Date().getTime());
         
-            const closeButton = document.createElement('button');
-            closeButton.textContent = 'Close';
-            closeButton.style.float = 'right';
-            setTimeout(() => {
-            closeButton.onclick = () => {
-                document.getElementById("teilwert-overlay").remove();
-            };
-            }, 100);
-            overlay.appendChild(closeButton);
         
             const info = `
                 <p>Name: ${item.name}</p>
