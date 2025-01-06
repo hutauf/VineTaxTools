@@ -70,6 +70,38 @@ GM_addStyle(`
               }
             }
 
+
+            function calculateEuerValues(item, settings, avgTeilwertEtvRatio) {
+                let use_teilwert = item.myteilwert || item.teilwert || (item.etv * avgTeilwertEtvRatio);
+                if (item.storniert) return { einnahmen: 0, ausgaben: 0, entnahmen: 0, einnahmen_aus_anlagevermoegen: 0 };
+
+                const itemDate = new Date(item.date);
+                const cutoffDate = new Date(2024, 9, 1);
+
+                let einnahmen = 0;
+                let ausgaben = 0;
+                let entnahmen = 0;
+                let einnahmen_aus_anlagevermoegen = 0;
+
+                if (settings.einnahmezumteilwert && itemDate < cutoffDate) {
+                    einnahmen += use_teilwert;
+                    ausgaben += use_teilwert;
+                } else {
+                    einnahmen += item.etv;
+                    ausgaben += item.etv;
+                }
+
+                if (item.entsorgt || item.lager || item.betriebsausgabe) return { einnahmen, ausgaben, entnahmen, einnahmen_aus_anlagevermoegen };
+
+                if (item.verkauft) {
+                    einnahmen_aus_anlagevermoegen += use_teilwert;
+                } else {
+                    entnahmen += use_teilwert;
+                }
+
+                return { einnahmen, ausgaben, entnahmen, einnahmen_aus_anlagevermoegen };
+            }
+
               function etvstrtofloat(etvString) {
                   const cleanString = etvString.replace(/[€ ]/g, '');
                   const cleanedValue = cleanString.replace(/[.,](?=\d{3})/g, '');
@@ -313,7 +345,7 @@ GM_addStyle(`
                             settings.teilwertschaetzungenzurpdf = event.target.checked;
                             await setValue("settings", settings);
                         });
-                        
+
 
 
 
@@ -636,7 +668,8 @@ async function createPieChart(list, parentElement) {
 
     const settings = await getValue("settings", {
         streuartikelregelung: true,
-        streuartikelregelungTeilwert: true
+        streuartikelregelungTeilwert: true,
+        einnahmezumteilwert: true
     });
 
     if (settings.streuartikelregelung) {
@@ -755,7 +788,8 @@ async function createPieChart(list, parentElement) {
                 const euerData = {
                     einnahmen: 0,
                     ausgaben: 0,
-                    entnahmen: 0
+                    entnahmen: 0,
+                    einnahmen_aus_anlagevermoegen: 0
                 };
 
                 const teilwertEtvRatios = itemsWithTeilwert.map(item => {
@@ -764,31 +798,15 @@ async function createPieChart(list, parentElement) {
                 });
                 const avgTeilwertEtvRatio = teilwertEtvRatios.reduce((sum, ratio) => sum + ratio, 0) / teilwertEtvRatios.length;
 
-                filteredList.forEach(item => {
-                    let use_teilwert = item.myteilwert || item.teilwert || (item.etv * avgTeilwertEtvRatio);
-                    if (item.storniert) return;
-
-                    const itemDate = new Date(item.date);
-                    const cutoffDate = new Date(2024, 9, 1);
-
-                    if (settings.einnahmezumteilwert && itemDate < cutoffDate) {
-                        euerData.einnahmen += use_teilwert;
-                        euerData.ausgaben += use_teilwert;
-                    } else {
-                        euerData.einnahmen += item.etv;
-                        euerData.ausgaben += item.etv;
-                    }
-
-                    if (item.entsorgt || item.lager || item.betriebsausgabe) return;
-
-                    if (item.verkauft) {
-                        euerData.einnahmen += use_teilwert;
-                    } else {
-                        euerData.entnahmen += use_teilwert;
-                    }
+                itemsWithTeilwert.forEach(item => {
+                    const { einnahmen, ausgaben, entnahmen, einnahmen_aus_anlagevermoegen } = calculateEuerValues(item, settings, avgTeilwertEtvRatio);
+                    euerData.einnahmen += einnahmen;
+                    euerData.ausgaben += ausgaben;
+                    euerData.entnahmen += entnahmen;
+                    euerData.einnahmen_aus_anlagevermoegen += einnahmen_aus_anlagevermoegen;
                 });
 
-                const gewinn = euerData.einnahmen - euerData.ausgaben + euerData.entnahmen;
+                const gewinn = euerData.einnahmen + euerData.einnahmen_aus_anlagevermoegen - euerData.ausgaben + euerData.entnahmen;
 
                 const euerTable = d3.select(parentElement).append('table').attr('class', 'euer-summary-table');
                 const euerThead = euerTable.append('thead');
@@ -798,7 +816,8 @@ async function createPieChart(list, parentElement) {
 
                 const euerTbody = euerTable.append('tbody');
                 const euerRows = [
-                    { label: 'Einnahmen', value: euerData.einnahmen.toFixed(2) },
+                    { label: 'Einnahmen', value: (euerData.einnahmen + euerData.einnahmen_aus_anlagevermoegen).toFixed(2) },
+                    { label: 'Einnahmen nach §19 UStG (Kleinunternehmerregelung)', value: euerData.einnahmen.toFixed(2) },
                     { label: 'Ausgaben', value: euerData.ausgaben.toFixed(2) },
                     { label: 'Entnahmen', value: euerData.entnahmen.toFixed(2) },
                     { label: 'Gewinn', value: gewinn.toFixed(2) }
