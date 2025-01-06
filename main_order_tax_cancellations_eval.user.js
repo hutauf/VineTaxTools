@@ -1167,7 +1167,7 @@ async function createPieChart(list, parentElement) {
         const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = 'merged-document.pdf';
+        link.download = 'vine-tax-report.pdf';
         window.progressBar.hide()
         link.click();
 
