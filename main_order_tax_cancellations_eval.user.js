@@ -1047,6 +1047,7 @@ async function createPieChart(list, parentElement) {
 
     // Fetch a PDF using GM_xmlHttpRequest
     function fetchPDF(url) {
+        if (url && url.endsWith('.pdf')) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'GET',
@@ -1056,6 +1057,9 @@ async function createPieChart(list, parentElement) {
                 onerror: (err) => reject(err),
             });
         });
+        } else {
+            return Promise.reject(new Error('Invalid URL or URL does not point to a PDF file.'));
+        }
     }
 
     function loadScript(url) {
