@@ -17,7 +17,8 @@
 // @grant       GM_xmlhttpRequest
 // @grant       GM_deleteValue
 // @grant       GM_listValues
-// @version     1.111
+// @grant       GM_setClipboard
+// @version     1.1111
 // @author      -
 // @description 09.01.2025
 // ==/UserScript==
@@ -270,7 +271,9 @@ GM_addStyle(`
                         <button id="show-all-data">Show All Data</button>
                         <button id="export-db">Export DB</button>
                         <button id="import-db">Import DB</button>
-                        <button id="create-pdf">Create PDF</button>
+                        <button id="create-pdf">Create large PDF</button>
+                        <button id="copy-pdf-list">CopyPDF link list</button>
+                        
 
                          <div id="status" style="margin-top: 10px;">nothing loaded yet</div>
                     </div>
@@ -412,6 +415,7 @@ GM_addStyle(`
                       document.getElementById('load-xlsx-info').addEventListener('click', loadXLSXInfo);
                       document.getElementById('show-all-data').addEventListener('click', showAllData);
                       document.getElementById('create-pdf').addEventListener('click', createPDF);
+                      document.getElementById('copy-pdf-list').addEventListener('click', copyPDFList);
                       const list = await load_all_asin_etv_values_from_storage();
                       userlog(`nothing loaded yet. ${list.length} items in database`);
                       createYearlyBreakdown(list);
@@ -1101,6 +1105,15 @@ async function createPieChart(list, parentElement) {
                 }
             });
         });
+    }
+
+
+  async function copyPDFList() {
+        const asinData = await load_all_asin_etv_values_from_storage();
+        const pdfList = asinData.map(item => item.pdf).filter(url => url && url.endsWith('.pdf'));
+        const pdfListText = pdfList.join('\n');
+        GM_setClipboard(pdfListText);
+        alert('PDF list copied to clipboard.');
     }
 
 
