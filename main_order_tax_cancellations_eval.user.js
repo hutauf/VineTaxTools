@@ -17,7 +17,7 @@
 // @grant       GM_xmlhttpRequest
 // @grant       GM_deleteValue
 // @grant       GM_listValues
-// @version     1.1
+// @version     1.11
 // @author      -
 // @description 07.01.2025
 // ==/UserScript==
@@ -467,6 +467,11 @@ GM_addStyle(`
     const cancelledAsins = await getValue("cancellations", []);
     // Filter out items with etv === 0
     const filteredItems = items.filter(item => !cancelledAsins.includes(item.ASIN) && item.etv > 0);
+
+    if (filteredItems.length === 0) {
+        console.log("No filtered items to plot.");
+        return;
+    }
 
     const width = 600, height = 400;
     const dataByDateMap = new Map();
