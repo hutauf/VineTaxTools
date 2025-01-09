@@ -306,6 +306,19 @@ GM_addStyle(`
                         div.appendChild(settingsDiv);
                         container.appendChild(div);
 
+                        const waitForElement = (selector) => {
+                            return new Promise((resolve) => {
+                                const interval = setInterval(() => {
+                                    if (document.querySelector(selector)) {
+                                        clearInterval(interval);
+                                        resolve(document.querySelector(selector));
+                                    }
+                                }, 100);
+                            });
+                        };
+
+                        await waitForElement('#cancellations');
+
                         document.getElementById('cancellations').addEventListener('change', async (event) => {
                             settings.cancellations = event.target.checked;
                             await setValue("settings", settings);
