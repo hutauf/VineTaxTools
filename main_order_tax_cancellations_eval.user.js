@@ -17,9 +17,9 @@
 // @grant       GM_xmlhttpRequest
 // @grant       GM_deleteValue
 // @grant       GM_listValues
-// @version     1.11
+// @version     1.111
 // @author      -
-// @description 07.01.2025
+// @description 09.01.2025
 // ==/UserScript==
 
 GM_addStyle(`
