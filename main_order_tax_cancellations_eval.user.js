@@ -350,12 +350,8 @@ GM_addStyle(`
 
 
                 document.getElementById('export-db').addEventListener('click', async () => {
-                    const keys = await listValues();
-                    const data = {};
-                    for (const key of keys) {
-                        data[key] = await getValue(key);
-                    }
-                    const json = JSON.stringify(data, null, 2);
+                    let asinDataAll = await getAllAsinValues();
+                    const json = JSON.stringify(asinDataAll, null, 2);
                     const blob = new Blob([json], { type: 'application/json' });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
