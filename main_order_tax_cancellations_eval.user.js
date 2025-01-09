@@ -1044,7 +1044,7 @@ async function createPieChart(list, parentElement) {
     // Fetch a PDF using GM_xmlHttpRequest
     function fetchPDF(url) {
         if (url && url.endsWith('.pdf')) {
-        return new Promise((resolve, reject) => {
+            return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: url,
@@ -1052,7 +1052,7 @@ async function createPieChart(list, parentElement) {
                 onload: (response) => resolve(new Uint8Array(response.response)),
                 onerror: (err) => reject(err),
             });
-        });
+            });
         } else {
             return Promise.reject(new Error('Invalid URL or URL does not point to a PDF file.'));
         }
@@ -1099,6 +1099,8 @@ async function createPieChart(list, parentElement) {
         tax0: false,
         yearFilter: "show all years",
         teilwertschaetzungenzurpdf: true,
+        streuartikelregelung: true,
+        streuartikelregelungTeilwert: true
     });
 
     let cancellations = await getValue('cancellations', []);
@@ -1116,6 +1118,8 @@ async function createPieChart(list, parentElement) {
         }
         return true;
     });
+
+    
 
     //TODO remove slicing
     asinData = filteredData
@@ -1165,6 +1169,29 @@ async function createPieChart(list, parentElement) {
             size: fontSize,
             lineHeight: 1.5*fontSize,
             maxWidth: width - 2 * margin
+        });
+
+        // add a new page with the EÜR calculation:
+        const euerPage = newPdf.addPage([600, 800]);
+        const euerText = `
+        Einnahmenüberschussrechnung
+        ---------------------------
+        `
+        euerData = {
+            einnahmen: 0,
+            ausgaben: 0,
+            entnahmen: 0,
+            einnahmen_aus_anlagevermoegen: 0
+        };
+        // calculate the EÜR values
+        const teilwertEtvRatios = 0.2; // for the PDF, we will just set this constant until we have the actual data
+        
+        itemsWithTeilwert.forEach(item => {
+            const { einnahmen, ausgaben, entnahmen, einnahmen_aus_anlagevermoegen } = calculateEuerValues(item, settings, avgTeilwertEtvRatio);
+            euerData.einnahmen += einnahmen;
+            euerData.ausgaben += ausgaben;
+            euerData.entnahmen += entnahmen;
+            euerData.einnahmen_aus_anlagevermoegen += einnahmen_aus_anlagevermoegen;
         });
 
 
