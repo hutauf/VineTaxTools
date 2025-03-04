@@ -18,11 +18,7 @@
 // @grant       GM_deleteValue
 // @grant       GM_listValues
 // @grant       GM_setClipboard
-<<<<<<< HEAD
-// @version     1.1111
-=======
-// @version     1.11111
->>>>>>> cf0a99b (try again load if not container)
+// @version     1.111111
 // @author      -
 // @description 09.01.2025
 // ==/UserScript==
