@@ -18,7 +18,11 @@
 // @grant       GM_deleteValue
 // @grant       GM_listValues
 // @grant       GM_setClipboard
+<<<<<<< HEAD
 // @version     1.1111
+=======
+// @version     1.11111
+>>>>>>> cf0a99b (try again load if not container)
 // @author      -
 // @description 09.01.2025
 // ==/UserScript==
@@ -1042,6 +1046,10 @@ async function createPieChart(list, parentElement) {
 
   function createUIorderpage() {
       const container = document.querySelector('.a-normal.vvp-orders-table');
+        if (!container) {
+            setTimeout(createUIorderpage, 1000);
+            return;
+        }
       const progressBar = createSimpleProgressBar(container.parentNode);
       window.progressBar = progressBar;
       const div = document.createElement('div');
