@@ -17,9 +17,10 @@
 // @grant       GM_xmlhttpRequest
 // @grant       GM_deleteValue
 // @grant       GM_listValues
-// @version     1.0
+// @grant       GM_setClipboard
+// @version     1.11111
 // @author      -
-// @description 30.6.2024, 18:20:31
+// @description 09.01.2025
 // ==/UserScript==
 
 GM_addStyle(`
@@ -270,7 +271,9 @@ GM_addStyle(`
                         <button id="show-all-data">Show All Data</button>
                         <button id="export-db">Export DB</button>
                         <button id="import-db">Import DB</button>
-                        <button id="create-pdf">Create PDF</button>
+                        <button id="create-pdf">Create large PDF</button>
+                        <button id="copy-pdf-list">CopyPDF link list</button>
+                        
 
                          <div id="status" style="margin-top: 10px;">nothing loaded yet</div>
                     </div>
@@ -305,6 +308,19 @@ GM_addStyle(`
 
                         div.appendChild(settingsDiv);
                         container.appendChild(div);
+
+                        const waitForElement = (selector) => {
+                            return new Promise((resolve) => {
+                                const interval = setInterval(() => {
+                                    if (document.querySelector(selector)) {
+                                        clearInterval(interval);
+                                        resolve(document.querySelector(selector));
+                                    }
+                                }, 100);
+                            });
+                        };
+
+                        await waitForElement('#cancellations');
 
                         document.getElementById('cancellations').addEventListener('change', async (event) => {
                             settings.cancellations = event.target.checked;
@@ -350,12 +366,8 @@ GM_addStyle(`
 
 
                 document.getElementById('export-db').addEventListener('click', async () => {
-                    const keys = await listValues();
-                    const data = {};
-                    for (const key of keys) {
-                        data[key] = await getValue(key);
-                    }
-                    const json = JSON.stringify(data, null, 2);
+                    let asinDataAll = await getAllAsinValues();
+                    const json = JSON.stringify(asinDataAll, null, 2);
                     const blob = new Blob([json], { type: 'application/json' });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
@@ -403,6 +415,7 @@ GM_addStyle(`
                       document.getElementById('load-xlsx-info').addEventListener('click', loadXLSXInfo);
                       document.getElementById('show-all-data').addEventListener('click', showAllData);
                       document.getElementById('create-pdf').addEventListener('click', createPDF);
+                      document.getElementById('copy-pdf-list').addEventListener('click', copyPDFList);
                       const list = await load_all_asin_etv_values_from_storage();
                       userlog(`nothing loaded yet. ${list.length} items in database`);
                       createYearlyBreakdown(list);
@@ -471,6 +484,11 @@ GM_addStyle(`
     const cancelledAsins = await getValue("cancellations", []);
     // Filter out items with etv === 0
     const filteredItems = items.filter(item => !cancelledAsins.includes(item.ASIN) && item.etv > 0);
+
+    if (filteredItems.length === 0) {
+        console.log("No filtered items to plot.");
+        return;
+    }
 
     const width = 600, height = 400;
     const dataByDateMap = new Map();
@@ -1024,6 +1042,10 @@ async function createPieChart(list, parentElement) {
 
   function createUIorderpage() {
       const container = document.querySelector('.a-normal.vvp-orders-table');
+        if (!container) {
+            setTimeout(createUIorderpage, 1000);
+            return;
+        }
       const progressBar = createSimpleProgressBar(container.parentNode);
       window.progressBar = progressBar;
       const div = document.createElement('div');
@@ -1047,7 +1069,8 @@ async function createPieChart(list, parentElement) {
 
     // Fetch a PDF using GM_xmlHttpRequest
     function fetchPDF(url) {
-        return new Promise((resolve, reject) => {
+        if (url && url.endsWith('.pdf')) {
+            return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: url,
@@ -1055,7 +1078,10 @@ async function createPieChart(list, parentElement) {
                 onload: (response) => resolve(new Uint8Array(response.response)),
                 onerror: (err) => reject(err),
             });
-        });
+            });
+        } else {
+            return Promise.reject(new Error('Invalid URL or URL does not point to a PDF file.'));
+        }
     }
 
     function loadScript(url) {
@@ -1083,6 +1109,15 @@ async function createPieChart(list, parentElement) {
                 }
             });
         });
+    }
+
+
+  async function copyPDFList() {
+        const asinData = await load_all_asin_etv_values_from_storage();
+        const pdfList = asinData.map(item => item.pdf).filter(url => url && url.endsWith('.pdf'));
+        const pdfListText = pdfList.join('\n');
+        GM_setClipboard(pdfListText);
+        alert('PDF list copied to clipboard.');
     }
 
 
