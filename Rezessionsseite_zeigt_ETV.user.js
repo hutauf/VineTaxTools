@@ -4,7 +4,8 @@
 // @version      1.0
 // @description  Replace "Rezensionsstatus" column with ETV values from localStorage using Dexie.js
 // @author       You
-// @match        *://www.amazon.de/vine/vine-reviews?*review-type=pending_review
+// @match        *://www.amazon.de/vine/vine-reviews?review-type=pending_review
+// @match        https://www.amazon.de/vine/vine-reviews
 // @require      https://unpkg.com/dexie@latest/dist/dexie.js
 // @grant        none
 // ==/UserScript==
