@@ -4,7 +4,7 @@
 // @match       https://www.amazon.de/vine/account*
 // @match       https://www.amazon.de/vine/orders*
 // @require     https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.8.0/jszip.js
-// @require     https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.8.0/xlsx.js
+// @require     https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js
 // @require     https://unpkg.com/dexie@latest/dist/dexie.js
 // @require     https://d3js.org/d3.v5.min.js
 // @require     https://cdn.plot.ly/plotly-latest.min.js
@@ -18,9 +18,9 @@
 // @grant       GM_deleteValue
 // @grant       GM_listValues
 // @grant       GM_setClipboard
-// @version     1.111111
+// @version     1.1111111
 // @author      -
-// @description 09.01.2025
+// @description 17.04.2025
 // ==/UserScript==
 
 GM_addStyle(`
@@ -104,6 +104,9 @@ GM_addStyle(`
             }
 
               function etvstrtofloat(etvString) {
+                if (typeof etvString === 'number') {
+                    return etvString;
+                }
                   const cleanString = etvString.replace(/[€ ]/g, '');
                   const cleanedValue = cleanString.replace(/[.,](?=\d{3})/g, '');
                   const etv = parseFloat(cleanedValue.replace(',', '.'));
@@ -271,6 +274,7 @@ GM_addStyle(`
                         <button id="show-all-data">Show All Data</button>
                         <button id="export-db">Export DB</button>
                         <button id="import-db">Import DB</button>
+                        <button id="export-xlsx">Export XLSX</button>
                         <button id="create-pdf">Create large PDF</button>
                         <button id="copy-pdf-list">CopyPDF link list</button>
                         
@@ -376,6 +380,68 @@ GM_addStyle(`
                     a.click();
                     URL.revokeObjectURL(url);
                 });
+
+                document.getElementById('export-xlsx').addEventListener('click', async () => {
+                    let asinData = await load_all_asin_etv_values_from_storage(false);
+
+
+                    const settings = await getValue("settings", {
+                        cancellations: false,
+                        tax0: false,
+                        yearFilter: "show all years",
+                        add2ndhalf2023to2024: true
+                    });
+            
+                    let cancellations = await getValue('cancellations', []);
+                    const filteredData = asinData.filter(item => {
+                        const itemYear = new Date(item.date).getFullYear();
+                        const itemMonth = new Date(item.date).getMonth();
+                        if (settings.yearFilter !== "show all years") {
+                        if (settings.yearFilter === "only 2023" && settings.add2ndhalf2023to2024) {
+                            if (!(itemYear === 2023 && itemMonth < 6)) {
+                            return false;
+                            }
+                        } else if (settings.yearFilter === "only 2024" && settings.add2ndhalf2023to2024) {
+                            if (!(itemYear === 2024 || (itemYear === 2023 && itemMonth >= 6))) {
+                            return false;
+                            }
+                        } else if (settings.yearFilter !== `only ${itemYear}`) {
+                            return false;
+                        }
+                        }
+                        if ((!settings.cancellations) && cancellations.includes(item.ASIN)) {
+                        return false;
+                        }
+                        if ((!settings.tax0) && item.etv == 0) {
+                        return false;
+                        }
+                        return true;
+                    });
+            
+                    asinData = filteredData;
+
+                    const columnNames = Array.from(new Set(asinData.flatMap(item => Object.keys(item))));
+                    console.log("Column Names:", columnNames);
+                    const workbook = XLSX.utils.book_new();
+                    const worksheetData = [columnNames];
+
+                    asinData.forEach(item => {
+                        const row = columnNames.map(column => item.hasOwnProperty(column) ? item[column] : '');
+                        worksheetData.push(row);
+                    });
+
+                    const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+                    XLSX.utils.book_append_sheet(workbook, worksheet, 'Data');
+
+                    const xlsxBlob = new Blob([XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })], { type: 'application/octet-stream' });
+                    const xlsxUrl = URL.createObjectURL(xlsxBlob);
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = xlsxUrl;
+                    downloadLink.download = 'exported_data.xlsx';
+                    downloadLink.click();
+                    URL.revokeObjectURL(xlsxUrl);
+                });
+                    
 
                 document.getElementById('import-db').addEventListener('click', () => {
                     const input = document.createElement('input');
