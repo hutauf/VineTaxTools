@@ -787,10 +787,12 @@ async function createPieChart(list, parentElement) {
           if (validRatios.length > 0) {
               const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
 
-              if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5 && itemsWithoutTeilwert.length > 0) {
-                  let use_teilwert = item.myteilwert || item.teilwert;
-                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + use_teilwert, 0);
-                  const estimatedTeilwert = itemsWithoutTeilwert.reduce((sum, item) => sum + (item.etv * avgTeilwertEtvRatio), 0);
+                if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5 && itemsWithoutTeilwert.length > 0) {
+                    const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => {
+                        const use_teilwert = item.myteilwert || item.teilwert;
+                        return sum + use_teilwert;
+                    }, 0);
+                    const estimatedTeilwert = itemsWithoutTeilwert.reduce((sum, item) => sum + (item.etv * avgTeilwertEtvRatio), 0);
                   const overallTeilwert = totalTeilwert + estimatedTeilwert;
 
                   const table = d3.select(parentElement).append('table').attr('class', 'teilwert-summary-table');
