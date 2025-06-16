@@ -1,0 +1,8 @@
+{
+  "name": "vinetaxtools",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "test": "node --test"
+  }
+}
