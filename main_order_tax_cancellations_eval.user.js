@@ -1135,7 +1135,7 @@ async function createPieChart(list, parentElement) {
   }
 
 
-    // Fetch a PDF using GM_xmlHttpRequest
+    // Fetch a PDF using GM_xmlhttpRequest
     function fetchPDF(url) {
         if (url && url.endsWith('.pdf')) {
             return new Promise((resolve, reject) => {
