@@ -103,7 +103,7 @@ GM_addStyle(`
                 return { einnahmen, ausgaben, entnahmen, einnahmen_aus_anlagevermoegen };
             }
 
-              function etvstrtofloat(etvString) {
+               function etvstrtofloat(etvString) {
                 if (typeof etvString === 'number') {
                     return etvString;
                 }
@@ -111,6 +111,42 @@ GM_addStyle(`
                   const cleanedValue = cleanString.replace(/[.,](?=\d{3})/g, '');
                   const etv = parseFloat(cleanedValue.replace(',', '.'));
                   return etv;
+              }
+
+              function parseDateSafe(dateStr) {
+                if (!dateStr) return null;
+                let trimmed = dateStr.trim();
+                let parsed = new Date(trimmed);
+                if (!isNaN(parsed)) return parsed;
+
+                trimmed = trimmed.split(',')[0];
+                trimmed = trimmed.replace(/\//g, '.').replace(/\s+/g, ' ').trim();
+
+                const numericParts = trimmed.split('.');
+                if (numericParts.length === 3 && numericParts[0] && numericParts[1] && numericParts[2]) {
+                  const day = numericParts[0].padStart(2, '0');
+                  const month = numericParts[1].padStart(2, '0');
+                  const year = numericParts[2];
+                  parsed = new Date(`${year}-${month}-${day}`);
+                  if (!isNaN(parsed)) return parsed;
+                }
+
+                const monthNames = {
+                  'Januar':1,'Februar':2,'März':3,'Maerz':3,'April':4,'Mai':5,
+                  'Juni':6,'Juli':7,'August':8,'September':9,'Oktober':10,'November':11,'Dezember':12
+                };
+                const match = trimmed.match(/(\d{1,2})\.?\s*([A-Za-zäöüÄÖÜß]+)\s*(\d{4})/);
+                if (match) {
+                  const day = match[1].padStart(2, '0');
+                  const monthIndex = monthNames[match[2]];
+                  const year = match[3];
+                  if (monthIndex) {
+                    parsed = new Date(`${year}-${String(monthIndex).padStart(2,'0')}-${day}`);
+                    if (!isNaN(parsed)) return parsed;
+                  }
+                }
+
+                return null;
               }
 
               async function load_all_asin_etv_values_from_storage(upload = true) {
@@ -123,23 +159,22 @@ GM_addStyle(`
 
                   let asinData = [];
                   let tempDataToSend = [];
+                  let errorDates = [];
 
                   for (let asinKey of asinKeys) {
                       let asin = asinKey.replace("ASIN_", "");
                       window.progressBar.setText(`Loading data for ASIN ${asin}... (${asinKeys.indexOf(asinKey) + 1}/${asinKeys.length})`);
                       window.progressBar.setFillWidth(((asinKeys.indexOf(asinKey) + 1) / asinKeys.length) * 100);
-                      
+
                       let jsonData = asinDataAll[asinKey]; //await getValue(asinKey);
 
                       let parsedData = jsonData ? JSON.parse(jsonData) : {};
-                      let [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
-                      let jsDate = new Date(`${year}-${month}-${day}`);
-                      try {
-                          parsedData.date = jsDate.toISOString();
-                      } catch (error) {
-                        console.log("error loading date, probably page not fully loaded");
-                          continue;
+                      let jsDate = parseDateSafe(parsedData.date);
+                      if (!jsDate) {
+                        errorDates.push(parsedData.date);
+                        continue;
                       }
+                      parsedData.date = jsDate.toISOString();
 
                       asinData.push({
                           ...parsedData,
@@ -200,26 +235,33 @@ GM_addStyle(`
                   });
                   }
 
+                  if (errorDates.length > 0) {
+                    alert('Fehler beim Lesen folgender Datumsangaben: ' + errorDates.join(', '));
+                  }
+
                   return asinData;
               }
 
-              async function loadXLSXInfo() {
-                  userlog("starting xlsx export");
-                  try {
-                      const yearElement = document.querySelector('select#vvp-tax-year-dropdown option:checked');
-                      const year = yearElement.value.trim();
-                      userlog("found year to be " + year);
-                      const blobData = await fetchData(year);
-                      await parseExcel(blobData);
+                async function loadXLSXInfo() {
+                    userlog("starting xlsx export");
+                    try {
+                        const yearElement = document.querySelector('select#vvp-tax-year-dropdown option:checked');
+                        const year = yearElement.value.trim();
+                        userlog("found year to be " + year);
+                        const blobData = await fetchData(year);
+                        const errors = await parseExcel(blobData);
 
-                      const status = document.getElementById('status');
-                      status.textContent = `Extraction successful. Data is stored locally.`;
-                  } catch (error) {
-                      console.error('Error loading XLSX info:', error);
-                      const status = document.getElementById('status');
-                      status.textContent = 'Error loading XLSX info';
-                  }
-              }
+                        const status = document.getElementById('status');
+                        status.textContent = `Extraction successful. Data is stored locally.`;
+                        if (errors.length > 0) {
+                            alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
+                        }
+                    } catch (error) {
+                        console.error('Error loading XLSX info:', error);
+                        const status = document.getElementById('status');
+                        status.textContent = 'Error loading XLSX info';
+                    }
+                }
 
               function createSimpleProgressBar(container) {
                 const progressBarContainer = document.createElement('div');
@@ -974,56 +1016,63 @@ async function createPieChart(list, parentElement) {
                   const worksheet = workbook.Sheets[sheetName];
                   const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
                   console.log(json);
-                  const extractedData = await extractData(json);
+                  const {data: extractedData, errors} = await extractData(json);
                   await saveData(extractedData);
+                  return errors;
               }
 
-              function parseOrdersTable() {
-                  const orders = document.querySelectorAll(".vvp-orders-table--row");
-                  const data = {};
+                function parseOrdersTable() {
+                    const orders = document.querySelectorAll(".vvp-orders-table--row");
+                    const data = {};
+                    const errors = [];
 
-                  orders.forEach((order) => {
-                      const orderDate = order.querySelector(".vvp-orders-table--text-col[data-order-timestamp]").textContent;
-                      const elements = order.querySelectorAll(".vvp-orders-table--text-col");
-                      const orderElement = Array.from(elements).find(el => el.hasAttribute("data-order-timestamp"));
-                      if (orderElement) {
-                        console.log(orderElement);
-                      } else {
-                        console.log('Element with data-order-timestamp not found');
-                      }
-                      const asinElement = order.querySelector("a[href^='https://www.amazon.de/dp/']");
-                      const productName = order.querySelector('span.a-truncate-full').textContent.trim();
-                      let etv = order.querySelector(".vvp-orders-table--text-col.vvp-text-align-right").textContent.trim();
-                      etv = etvstrtofloat(etv);
-                      const orderNumber = order.innerHTML.match(/orderID=([^&]+)/)[1].split('"')[0];
-                      console.log(orderDate, asinElement, etv);
-                      if (asinElement) {
-                          const asin = asinElement.getAttribute("href").split("/")[4];
-                          data[asin] = {
-                              name: productName,
-                              ordernumber: orderNumber,
-                              date: orderDate,
-                              etv: etv
-                          };
-                      } else {
-                          const alternativeAsinElement = order.querySelector(".vvp-orders-table--text-col");
-                          if (alternativeAsinElement) {
-                              const alternativeAsin = alternativeAsinElement.textContent.trim().split(" ")[0];
-                              data[alternativeAsin] = {
-                                  name: productName,
-                                  ordernumber: orderNumber,
-                                  date: orderDate,
-                                  etv: etv
-                              };
-                          }
-                      }
-                  });
+                    orders.forEach((order) => {
+                        const orderDate = order.querySelector(".vvp-orders-table--text-col[data-order-timestamp]").textContent.trim();
+                        const elements = order.querySelectorAll(".vvp-orders-table--text-col");
+                        const orderElement = Array.from(elements).find(el => el.hasAttribute("data-order-timestamp"));
+                        if (orderElement) {
+                          console.log(orderElement);
+                        } else {
+                          console.log('Element with data-order-timestamp not found');
+                        }
+                        const parsedDate = parseDateSafe(orderDate);
+                        const asinElement = order.querySelector("a[href^='https://www.amazon.de/dp/']");
+                        const productName = order.querySelector('span.a-truncate-full').textContent.trim();
+                        let etv = order.querySelector(".vvp-orders-table--text-col.vvp-text-align-right").textContent.trim();
+                        etv = etvstrtofloat(etv);
+                        const orderNumber = order.innerHTML.match(/orderID=([^&]+)/)[1].split('"')[0];
+                        console.log(orderDate, asinElement, etv);
+                        if (asinElement) {
+                            const asin = asinElement.getAttribute("href").split("/")[4];
+                            data[asin] = {
+                                name: productName,
+                                ordernumber: orderNumber,
+                                date: parsedDate ? parsedDate.toISOString() : orderDate,
+                                etv: etv
+                            };
+                        } else {
+                            const alternativeAsinElement = order.querySelector(".vvp-orders-table--text-col");
+                            if (alternativeAsinElement) {
+                                const alternativeAsin = alternativeAsinElement.textContent.trim().split(" ")[0];
+                                data[alternativeAsin] = {
+                                    name: productName,
+                                    ordernumber: orderNumber,
+                                    date: parsedDate ? parsedDate.toISOString() : orderDate,
+                                    etv: etv
+                                };
+                            }
+                        }
+                        if (!parsedDate) {
+                            errors.push(orderDate);
+                        }
+                    });
 
-                  return data;
-              }
+                    return {data, errors};
+                }
 
               async function extractData(json) {
                   const data = {};
+                  const errors = [];
                   const headerRowIndex = 2;
                   const header = json[headerRowIndex];
 
@@ -1040,6 +1089,7 @@ async function createPieChart(list, parentElement) {
                       const name = row[2];
                       const orderType = row[3];
                       const orderDate = row[4];
+                      const parsedDate = parseDateSafe(orderDate);
                       const etvString = row[row.length - 1];
                       const etv = etvstrtofloat(etvString);
 
@@ -1055,13 +1105,16 @@ async function createPieChart(list, parentElement) {
                           data[asin] = {
                               name: name,
                               ordernumber: orderNumber,
-                              date: orderDate,
+                              date: parsedDate ? parsedDate.toISOString() : orderDate,
                               etv: etv
                           };
+                          if (!parsedDate) {
+                              errors.push(orderDate);
+                          }
                       }
                   }
 
-                  return data;
+                  return {data, errors};
               }
 
               async function saveData(data) {
@@ -1080,10 +1133,13 @@ async function createPieChart(list, parentElement) {
                       const year = yearElement.value.trim();
                       userlog("found year to be " + year);
                       const blobData = await fetchData(year);
-                      await parseExcel(blobData);
+                      const errors = await parseExcel(blobData);
 
                       const status = document.getElementById('status');
                       status.textContent = `Extraction successful. Data is stored locally.`;
+                      if (errors.length > 0) {
+                          alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
+                      }
                   } catch (error) {
                       console.error('Error loading XLSX info:', error);
                       const status = document.getElementById('status');
@@ -1091,22 +1147,25 @@ async function createPieChart(list, parentElement) {
                   }
               }
 
-              async function loadOrdersInfo() {
-                  userlog("Starting order info extraction");
+                async function loadOrdersInfo() {
+                    userlog("Starting order info extraction");
 
-                  try {
-                      const jsonData = parseOrdersTable();
-                      await saveData(jsonData);
+                    try {
+                        const {data, errors} = parseOrdersTable();
+                        await saveData(data);
 
-                      const status = document.getElementById('status');
-                      status.textContent = `Extraction successful. Number of items: ${Object.keys(jsonData).length}`;
-                      window.progressBar.hide();
-                  } catch (error) {
-                      console.error('Error loading order info:', error);
-                      const status = document.getElementById('status');
-                      status.textContent = 'Error loading order info';
-                  }
-              }
+                        const status = document.getElementById('status');
+                        status.textContent = `Extraction successful. Number of items: ${Object.keys(data).length}`;
+                        if (errors.length > 0) {
+                            alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
+                        }
+                        window.progressBar.hide();
+                    } catch (error) {
+                        console.error('Error loading order info:', error);
+                        const status = document.getElementById('status');
+                        status.textContent = 'Error loading order info';
+                    }
+                }
 
   function createUIorderpage() {
       const container = document.querySelector('.a-normal.vvp-orders-table');
