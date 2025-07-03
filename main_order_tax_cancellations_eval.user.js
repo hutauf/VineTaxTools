@@ -18,9 +18,9 @@
 // @grant       GM_deleteValue
 // @grant       GM_listValues
 // @grant       GM_setClipboard
-// @version     1.1111111
+// @version     1.111111
 // @author      -
-// @description 17.04.2025
+// @description 09.01.2025
 // ==/UserScript==
 
 GM_addStyle(`
@@ -113,6 +113,144 @@ GM_addStyle(`
                   return etv;
               }
 
+              async function delete_database_with_token() {
+                let token = await getValue("token");
+                if (!token) {
+                    console.log("No token found");
+                    return;
+                }
+                let data = {"token": token, "request": "delete_all"};
+                let endpoint = "data_operations";
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
+                    headers: { 'Content-Type': 'application/json' },
+                    data: JSON.stringify(data),
+                    onload: function(response) {
+                        let result = JSON.parse(response.responseText);
+                        console.log(result);
+                        if (result.status === "success") {
+                            console.log("Database deleted successfully");
+                        } else {
+                            console.log("Failed to delete database");
+                        }
+                    }
+                });
+              }
+
+              async function download_database_with_token() {
+                let token = await getValue("token");
+                if (!token) {
+                    console.log("No token found");
+                    return;
+                }
+                window.progressBar.setText('Pulling database from server now...');
+                let data = {"token": token, "request": "get_all"};
+                let endpoint = "data_operations";
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
+                    headers: { 'Content-Type': 'application/json' },
+                    data: JSON.stringify(data),
+                    onload: async function(response) {
+                        if (response.status >= 200 && response.status < 300) {
+                            let result = JSON.parse(response.responseText);
+                            if (result.status === "success") {
+                                let asinData = result.data;
+                                for (let asin of asinData) {
+                                    let local_data = await getValue("ASIN_" + asin.ASIN);
+                                    if (local_data) {
+                                        let local_timestamp = local_data.timestamp ? local_data.timestamp : 0;
+                                        let remote_timestamp = asin.timestamp ? asin.timestamp : 0;
+                                        if (remote_timestamp > local_timestamp) {
+                                            await setValue("ASIN_" + asin.ASIN, asin.value);
+                                        }
+                                    } else {
+                                        await setValue("ASIN_" + asin.ASIN, asin.value);
+                                    }
+                                }
+                                console.log("Database downloaded successfully");
+                            } else {
+                                console.log("Failed to download database");
+                            }
+                        } else {
+                            console.error("Failed to send data to the server.");
+                        }
+                    },
+                    onerror: function(error) {
+                        console.error("Error sending data to the server:", error);
+                    }
+                });
+              }
+
+              async function upload_local_database_with_token() {
+                let token = await getValue("token");
+                if (!token) {
+                    console.log("No token found");
+                    return;
+                }
+                window.progressBar.setText('Pushing database to server now...');
+                let keys = await listValues();
+                let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
+                console.log(asinKeys.length)
+
+                let asinDataAll = await getAllAsinValues();
+
+                let asinData = [];
+
+                for (let asinKey of asinKeys) {
+                    let asin = asinKey.replace("ASIN_", "");
+                    window.progressBar.setText(`Loading data for ASIN ${asin}... (${asinKeys.indexOf(asinKey) + 1}/${asinKeys.length})`);
+                    window.progressBar.setFillWidth(((asinKeys.indexOf(asinKey) + 1) / asinKeys.length) * 100);
+
+                    let jsonData = asinDataAll[asinKey]; //await getValue(asinKey);
+
+                    let parsedData = jsonData ? JSON.parse(jsonData) : {};
+                    let [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
+                    let jsDate = new Date(Date.UTC(year, month-1, day));
+                    try {
+                        parsedData.date = jsDate.toISOString();
+                    } catch (error) {
+                      console.log("error loading date, probably page not fully loaded");
+                        continue;
+                    }
+                    // now we produce a structure like this:
+                    let value = JSON.stringify(parsedData);
+                    asinData.push({
+                        ASIN: asin,
+                        timestamp: 0,
+                        value: value
+                    });
+
+                }
+
+                console.log("data to upload", asinData);
+
+
+                let data = {"token": token, "request": "update_asin", "payload": asinData};
+                let endpoint = "data_operations";
+
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
+                    headers: { 'Content-Type': 'application/json' },
+                    data: JSON.stringify(data),
+                    onload: function(response) {
+                        if (response.status >= 200 && response.status < 300) {
+                            console.log("Data successfully sent to the server.");
+                        } else {
+                            console.log(response.text);
+                            console.error("Failed to send data to the server.");
+                        }
+                    },
+                    onerror: function(error) {
+                        console.error("Error sending data to the server:", error);
+                    }
+                });
+            }
+
+
+
               async function load_all_asin_etv_values_from_storage(upload = true) {
                   window.progressBar.setText('Loading data from storage...');
                   let keys = await listValues();
@@ -128,12 +266,12 @@ GM_addStyle(`
                       let asin = asinKey.replace("ASIN_", "");
                       window.progressBar.setText(`Loading data for ASIN ${asin}... (${asinKeys.indexOf(asinKey) + 1}/${asinKeys.length})`);
                       window.progressBar.setFillWidth(((asinKeys.indexOf(asinKey) + 1) / asinKeys.length) * 100);
-                      
+
                       let jsonData = asinDataAll[asinKey]; //await getValue(asinKey);
 
                       let parsedData = jsonData ? JSON.parse(jsonData) : {};
                       let [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
-                      let jsDate = new Date(`${year}-${month}-${day}`);
+                      let jsDate = new Date(Date.UTC(year, month-1, day));
                       try {
                           parsedData.date = jsDate.toISOString();
                       } catch (error) {
@@ -145,11 +283,14 @@ GM_addStyle(`
                           ...parsedData,
                           ASIN: asin
                       });
-                      tempDataToSend.push({
-                          ASIN: asin,
-                          name: parsedData.name,
-                          ETV: parsedData.etv
-                      });
+
+
+                    tempDataToSend.push({
+                        ASIN: asin,
+                        name: parsedData.name,
+                        ETV: parsedData.etv
+                    });
+
                   };
 
                   if (upload) {
@@ -277,7 +418,7 @@ GM_addStyle(`
                         <button id="export-xlsx">Export XLSX</button>
                         <button id="create-pdf">Create large PDF</button>
                         <button id="copy-pdf-list">CopyPDF link list</button>
-                        
+
 
                          <div id="status" style="margin-top: 10px;">nothing loaded yet</div>
                     </div>
@@ -307,6 +448,11 @@ GM_addStyle(`
                                     <option value="only 2024" ${settings.yearFilter === "only 2024" ? 'selected' : ''}>Only 2024</option>
                                     <option value="only 2025" ${settings.yearFilter === "only 2025" ? 'selected' : ''}>Only 2025</option>
                                 </select>
+                                <button id="setTokenButton" style="margin-top: 10px;">Set token</button>
+                                <button id="uploadButton" style="margin-top: 10px;">Upload data</button>
+                                <button id="downloadButton" style="margin-top: 10px;">Download data</button>
+                                <button id="deleteButton" style="margin-top: 10px;">Delete data</button>
+
                             </div>
                         `;
 
@@ -366,7 +512,22 @@ GM_addStyle(`
                             await setValue("settings", settings);
                         });
 
+                        document.getElementById('setTokenButton').addEventListener('click', async () => {
+                            const token = prompt("Enter token:");
+                            await setValue("token", token);
+                        });
 
+                        document.getElementById('uploadButton').addEventListener('click', async () => {
+                            await upload_local_database_with_token();
+                        });
+
+                        document.getElementById('downloadButton').addEventListener('click', async () => {
+                            await download_database_with_token();
+                        });
+
+                        document.getElementById('deleteButton').addEventListener('click', async () => {
+                            await delete_database_with_token();
+                        });
 
 
                 document.getElementById('export-db').addEventListener('click', async () => {
@@ -391,7 +552,7 @@ GM_addStyle(`
                         yearFilter: "show all years",
                         add2ndhalf2023to2024: true
                     });
-            
+
                     let cancellations = await getValue('cancellations', []);
                     const filteredData = asinData.filter(item => {
                         const itemYear = new Date(item.date).getFullYear();
@@ -417,7 +578,7 @@ GM_addStyle(`
                         }
                         return true;
                     });
-            
+
                     asinData = filteredData;
 
                     const columnNames = Array.from(new Set(asinData.flatMap(item => Object.keys(item))));
@@ -441,7 +602,7 @@ GM_addStyle(`
                     downloadLink.click();
                     URL.revokeObjectURL(xlsxUrl);
                 });
-                    
+
 
                 document.getElementById('import-db').addEventListener('click', () => {
                     const input = document.createElement('input');
@@ -768,7 +929,7 @@ async function createPieChart(list, parentElement) {
         });
     }
 
-    
+
       const itemsWithTeilwert = filteredList.filter(item => item.myteilwert != null || item.teilwert != null);
       const itemsWithoutTeilwert = filteredList.filter(item => (item.myteilwert == null && item.teilwert == null) && item.etv > 0);
 
@@ -787,12 +948,10 @@ async function createPieChart(list, parentElement) {
           if (validRatios.length > 0) {
               const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
 
-                if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5 && itemsWithoutTeilwert.length > 0) {
-                    const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => {
-                        const use_teilwert = item.myteilwert || item.teilwert;
-                        return sum + use_teilwert;
-                    }, 0);
-                    const estimatedTeilwert = itemsWithoutTeilwert.reduce((sum, item) => sum + (item.etv * avgTeilwertEtvRatio), 0);
+              if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5 && itemsWithoutTeilwert.length > 0) {
+                  let use_teilwert = item.myteilwert || item.teilwert;
+                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + use_teilwert, 0);
+                  const estimatedTeilwert = itemsWithoutTeilwert.reduce((sum, item) => sum + (item.etv * avgTeilwertEtvRatio), 0);
                   const overallTeilwert = totalTeilwert + estimatedTeilwert;
 
                   const table = d3.select(parentElement).append('table').attr('class', 'teilwert-summary-table');
@@ -1096,6 +1255,7 @@ async function createPieChart(list, parentElement) {
 
                   try {
                       const jsonData = parseOrdersTable();
+                      console.log("saving orders table:", jsonData);
                       await saveData(jsonData);
 
                       const status = document.getElementById('status');
@@ -1135,7 +1295,7 @@ async function createPieChart(list, parentElement) {
   }
 
 
-    // Fetch a PDF using GM_xmlhttpRequest
+    // Fetch a PDF using GM_xmlHttpRequest
     function fetchPDF(url) {
         if (url && url.endsWith('.pdf')) {
             return new Promise((resolve, reject) => {
@@ -1222,7 +1382,7 @@ async function createPieChart(list, parentElement) {
         return true;
     });
 
-    
+
 
     //TODO remove slicing
     asinData = filteredData
@@ -1288,7 +1448,7 @@ async function createPieChart(list, parentElement) {
         };
         // calculate the EÜR values
         const teilwertEtvRatios = 0.2; // for the PDF, we will just set this constant until we have the actual data
-        
+
         itemsWithTeilwert.forEach(item => {
             const { einnahmen, ausgaben, entnahmen, einnahmen_aus_anlagevermoegen } = calculateEuerValues(item, settings, avgTeilwertEtvRatio);
             euerData.einnahmen += einnahmen;
@@ -1316,7 +1476,7 @@ async function createPieChart(list, parentElement) {
                 }
             }
         }
-        
+
         // Serialize and download the merged PDF
         const finalPdfBytes = await newPdf.save();
         const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
@@ -1443,7 +1603,7 @@ async function createPieChart(list, parentElement) {
             }
 
             const asin = item.ASIN;
-        
+
             const overlay = document.createElement('div');
             overlay.style.position = 'fixed';
             overlay.style.top = '50%';
@@ -1456,8 +1616,8 @@ async function createPieChart(list, parentElement) {
             overlay.style.width = '300px';
             overlay.id = 'teilwert-overlay';
             overlay.setAttribute('data-spawn-date', new Date().getTime());
-        
-        
+
+
             const info = `
                 <p>Name: ${item.name}</p>
                 <p>ASIN: ${item.ASIN}</p>
@@ -1470,7 +1630,7 @@ async function createPieChart(list, parentElement) {
                 <p>Angepasster Teilwert: <input type="text" id="angepasster-teilwert" value="${item.myteilwert != null ? item.myteilwert : ''}"></p>
             `;
             overlay.innerHTML += info;
-        
+
             document.body.appendChild(overlay);
 
             const checkboxes = [
@@ -1480,7 +1640,7 @@ async function createPieChart(list, parentElement) {
                 { id: 'storniert', label: 'Storniert' },
                 { id: 'betriebsausgabe', label: 'Betriebsausgabe' }
             ];
-        
+
             checkboxes.forEach(checkbox => {
                 const isChecked = item[checkbox.id] === true;
                 const checkboxElement = document.createElement('div');
@@ -1490,14 +1650,14 @@ async function createPieChart(list, parentElement) {
                     </label>
                 `;
                 overlay.appendChild(checkboxElement);
-        
+
                 document.getElementById(checkbox.id).addEventListener('change', async (event) => {
                     const updatedItem = JSON.parse(await getValue(`ASIN_${asin}`));
                     updatedItem[checkbox.id] = event.target.checked;
                     await setValue(`ASIN_${asin}`, JSON.stringify(updatedItem));
                 });
             });
-        
+
             document.getElementById('angepasster-teilwert').addEventListener('change', async (event) => {
                 const value = parseFloat(event.target.value.replace(',', '.'));
                 if (!isNaN(value)) {
@@ -1506,7 +1666,7 @@ async function createPieChart(list, parentElement) {
                     await setValue(`ASIN_${asin}`, JSON.stringify(updatedItem));
                 }
             });
-        
+
         }
 
         asinData.forEach(item => {
