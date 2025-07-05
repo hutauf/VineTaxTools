@@ -116,6 +116,18 @@ GM_addStyle(`
               function parseDateSafe(dateStr) {
                 if (!dateStr) return null;
                 let trimmed = dateStr.trim();
+
+                // check german format first to avoid wrong interpretation
+                let matchNumeric = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
+                if (matchNumeric) {
+                  const day = matchNumeric[1].padStart(2, '0');
+                  const month = matchNumeric[2].padStart(2, '0');
+                  let year = matchNumeric[3];
+                  if (year.length === 2) year = '20' + year;
+                  let parsed = new Date(`${year}-${month}-${day}`);
+                  if (!isNaN(parsed)) return parsed;
+                }
+
                 let parsed = new Date(trimmed);
                 if (!isNaN(parsed)) return parsed;
 
