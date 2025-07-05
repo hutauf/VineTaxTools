@@ -149,141 +149,193 @@ GM_addStyle(`
                 return null;
               }
 
-              async function delete_database_with_token() {
-                let token = await getValue("token");
-                if (!token) {
+              class PrivateBackendHandler {
+                async deleteDatabase() {
+                  const token = await getValue("token");
+                  if (!token) {
                     console.log("No token found");
                     return;
-                }
-                let data = {"token": token, "request": "delete_all"};
-                let endpoint = "data_operations";
-                GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
-                    headers: { 'Content-Type': 'application/json' },
+                  }
+                  const data = { token, request: "delete_all" };
+                  const endpoint = "data_operations";
+                  GM_xmlhttpRequest({
+                    method: "POST",
+                    url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
+                    headers: { "Content-Type": "application/json" },
                     data: JSON.stringify(data),
                     onload: function(response) {
-                        let result = JSON.parse(response.responseText);
-                        console.log(result);
-                        if (result.status === "success") {
-                            console.log("Database deleted successfully");
-                        } else {
-                            console.log("Failed to delete database");
-                        }
+                      const result = JSON.parse(response.responseText);
+                      console.log(result);
+                      if (result.status === "success") {
+                        console.log("Database deleted successfully");
+                      } else {
+                        console.log("Failed to delete database");
+                      }
                     }
-                });
-              }
+                  });
+                }
 
-              async function download_database_with_token() {
-                let token = await getValue("token");
-                if (!token) {
+                async downloadDatabase() {
+                  const token = await getValue("token");
+                  if (!token) {
                     console.log("No token found");
                     return;
-                }
-                window.progressBar.setText('Pulling database from server now...');
-                let data = {"token": token, "request": "get_all"};
-                let endpoint = "data_operations";
-                GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
-                    headers: { 'Content-Type': 'application/json' },
+                  }
+                  window.progressBar.setText('Pulling database from server now...');
+                  const data = { token, request: "get_all" };
+                  const endpoint = "data_operations";
+                  GM_xmlhttpRequest({
+                    method: "POST",
+                    url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
+                    headers: { "Content-Type": "application/json" },
                     data: JSON.stringify(data),
-                    onload: async function(response) {
-                        if (response.status >= 200 && response.status < 300) {
-                            let result = JSON.parse(response.responseText);
-                            if (result.status === "success") {
-                                let asinData = result.data;
-                                for (let asin of asinData) {
-                                    let local_data = await getValue("ASIN_" + asin.ASIN);
-                                    if (local_data) {
-                                        let local_timestamp = local_data.timestamp ? local_data.timestamp : 0;
-                                        let remote_timestamp = asin.timestamp ? asin.timestamp : 0;
-                                        if (remote_timestamp > local_timestamp) {
-                                            await setValue("ASIN_" + asin.ASIN, asin.value);
-                                        }
-                                    } else {
-                                        await setValue("ASIN_" + asin.ASIN, asin.value);
-                                    }
-                                }
-                                console.log("Database downloaded successfully");
+                    onload: async (response) => {
+                      if (response.status >= 200 && response.status < 300) {
+                        const result = JSON.parse(response.responseText);
+                        if (result.status === "success") {
+                          const asinData = result.data;
+                          for (const asin of asinData) {
+                            const local_data = await getValue("ASIN_" + asin.ASIN);
+                            if (local_data) {
+                              const local_timestamp = local_data.timestamp ? local_data.timestamp : 0;
+                              const remote_timestamp = asin.timestamp ? asin.timestamp : 0;
+                              if (remote_timestamp > local_timestamp) {
+                                await setValue("ASIN_" + asin.ASIN, asin.value);
+                              }
                             } else {
-                                console.log("Failed to download database");
+                              await setValue("ASIN_" + asin.ASIN, asin.value);
                             }
+                          }
+                          console.log("Database downloaded successfully");
                         } else {
-                            console.error("Failed to send data to the server.");
+                          console.log("Failed to download database");
                         }
+                      } else {
+                        console.error("Failed to send data to the server.");
+                      }
                     },
                     onerror: function(error) {
-                        console.error("Error sending data to the server:", error);
+                      console.error("Error sending data to the server:", error);
                     }
-                });
-              }
+                  });
+                }
 
-              async function upload_local_database_with_token() {
-                let token = await getValue("token");
-                if (!token) {
+                async uploadLocalDatabase() {
+                  const token = await getValue("token");
+                  if (!token) {
                     console.log("No token found");
                     return;
-                }
-                window.progressBar.setText('Pushing database to server now...');
-                let keys = await listValues();
-                let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
-                console.log(asinKeys.length)
+                  }
+                  window.progressBar.setText('Pushing database to server now...');
+                  const keys = await listValues();
+                  const asinKeys = keys.filter(key => key.startsWith("ASIN_"));
 
-                let asinDataAll = await getAllAsinValues();
+                  const asinDataAll = await getAllAsinValues();
+                  const asinData = [];
 
-                let asinData = [];
-
-                for (let asinKey of asinKeys) {
-                    let asin = asinKey.replace("ASIN_", "");
+                  for (const asinKey of asinKeys) {
+                    const asin = asinKey.replace("ASIN_", "");
                     window.progressBar.setText(`Loading data for ASIN ${asin}... (${asinKeys.indexOf(asinKey) + 1}/${asinKeys.length})`);
                     window.progressBar.setFillWidth(((asinKeys.indexOf(asinKey) + 1) / asinKeys.length) * 100);
 
-                    let jsonData = asinDataAll[asinKey]; //await getValue(asinKey);
-
-                    let parsedData = jsonData ? JSON.parse(jsonData) : {};
-                    let [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
-                    let jsDate = new Date(Date.UTC(year, month-1, day));
+                    const jsonData = asinDataAll[asinKey];
+                    const parsedData = jsonData ? JSON.parse(jsonData) : {};
+                    const [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
+                    const jsDate = new Date(Date.UTC(year, month - 1, day));
                     try {
-                        parsedData.date = jsDate.toISOString();
+                      parsedData.date = jsDate.toISOString();
                     } catch (error) {
                       console.log("error loading date, probably page not fully loaded");
-                        continue;
+                      continue;
                     }
-                    // now we produce a structure like this:
-                    let value = JSON.stringify(parsedData);
                     asinData.push({
-                        ASIN: asin,
-                        timestamp: 0,
-                        value: value
+                      ASIN: asin,
+                      timestamp: 0,
+                      value: JSON.stringify(parsedData)
                     });
+                  }
 
+                  const data = { token, request: "update_asin", payload: asinData };
+                  const endpoint = "data_operations";
+
+                  GM_xmlhttpRequest({
+                    method: "POST",
+                    url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
+                    headers: { "Content-Type": "application/json" },
+                    data: JSON.stringify(data),
+                    onload: function(response) {
+                      if (response.status >= 200 && response.status < 300) {
+                        console.log("Data successfully sent to the server.");
+                      } else {
+                        console.log(response.text);
+                        console.error("Failed to send data to the server.");
+                      }
+                    },
+                    onerror: function(error) {
+                      console.error("Error sending data to the server:", error);
+                    }
+                  });
                 }
 
-                console.log("data to upload", asinData);
+                async syncProducts(products) {
+                  if (!Array.isArray(products) || products.length === 0) return;
 
+                  const anonPayload = products.map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
+                  GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
+                    headers: { 'Content-Type': 'application/json' },
+                    data: JSON.stringify(anonPayload)
+                  });
 
-                let data = {"token": token, "request": "update_asin", "payload": asinData};
-                let endpoint = "data_operations";
-
-                GM_xmlhttpRequest({
+                  const token = await getValue("token");
+                  if (!token) {
+                    console.log("No token found");
+                    return;
+                  }
+                  const payload = products.map(p => ({ ASIN: p.ASIN, timestamp: 0, value: JSON.stringify(p) }));
+                  const data = { token, request: 'update_asin', payload };
+                  const endpoint = 'data_operations';
+                  GM_xmlhttpRequest({
                     method: 'POST',
                     url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
                     headers: { 'Content-Type': 'application/json' },
-                    data: JSON.stringify(data),
-                    onload: function(response) {
-                        if (response.status >= 200 && response.status < 300) {
-                            console.log("Data successfully sent to the server.");
-                        } else {
-                            console.log(response.text);
-                            console.error("Failed to send data to the server.");
-                        }
-                    },
-                    onerror: function(error) {
-                        console.error("Error sending data to the server:", error);
-                    }
-                });
-            }
+                    data: JSON.stringify(data)
+                  });
+                }
+
+                createButtons() {
+                  const container = document.createElement('div');
+                  container.innerHTML = `
+                    <button id="setTokenButton" style="margin-top: 10px;">Set token</button>
+                    <button id="uploadButton" style="margin-top: 10px;">Upload data</button>
+                    <button id="downloadButton" style="margin-top: 10px;">Download data</button>
+                    <button id="deleteButton" style="margin-top: 10px;">Delete data</button>
+                  `;
+
+                  container.querySelector('#setTokenButton').addEventListener('click', async () => {
+                    const token = prompt('Enter token:');
+                    await setValue('token', token);
+                  });
+
+                  container.querySelector('#uploadButton').addEventListener('click', async () => {
+                    await this.uploadLocalDatabase();
+                  });
+
+                  container.querySelector('#downloadButton').addEventListener('click', async () => {
+                    await this.downloadDatabase();
+                  });
+
+                  container.querySelector('#deleteButton').addEventListener('click', async () => {
+                    await this.deleteDatabase();
+                  });
+
+                  return container;
+                }
+              }
+
+              const backendHandler = new PrivateBackendHandler();
+
 
 
 
@@ -393,7 +445,7 @@ GM_addStyle(`
                         const errors = await parseExcel(blobData);
 
                         const status = document.getElementById('status');
-                        status.textContent = `Extraction successful. Data is stored locally.`;
+                        status.textContent = `Extraction successful. Data synced and stored locally.`;
                         if (errors.length > 0) {
                             alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
                         }
@@ -490,14 +542,11 @@ GM_addStyle(`
                                     <option value="only 2024" ${settings.yearFilter === "only 2024" ? 'selected' : ''}>Only 2024</option>
                                     <option value="only 2025" ${settings.yearFilter === "only 2025" ? 'selected' : ''}>Only 2025</option>
                                 </select>
-                                <button id="setTokenButton" style="margin-top: 10px;">Set token</button>
-                                <button id="uploadButton" style="margin-top: 10px;">Upload data</button>
-                                <button id="downloadButton" style="margin-top: 10px;">Download data</button>
-                                <button id="deleteButton" style="margin-top: 10px;">Delete data</button>
 
                             </div>
                         `;
 
+                        settingsDiv.appendChild(backendHandler.createButtons());
                         div.appendChild(settingsDiv);
                         container.appendChild(div);
 
@@ -554,22 +603,6 @@ GM_addStyle(`
                             await setValue("settings", settings);
                         });
 
-                        document.getElementById('setTokenButton').addEventListener('click', async () => {
-                            const token = prompt("Enter token:");
-                            await setValue("token", token);
-                        });
-
-                        document.getElementById('uploadButton').addEventListener('click', async () => {
-                            await upload_local_database_with_token();
-                        });
-
-                        document.getElementById('downloadButton').addEventListener('click', async () => {
-                            await download_database_with_token();
-                        });
-
-                        document.getElementById('deleteButton').addEventListener('click', async () => {
-                            await delete_database_with_token();
-                        });
 
 
                 document.getElementById('export-db').addEventListener('click', async () => {
@@ -1176,7 +1209,7 @@ async function createPieChart(list, parentElement) {
                   const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
                   console.log(json);
                   const {data: extractedData, errors} = await extractData(json);
-                  await saveData(extractedData);
+                  await saveData(extractedData, true);
                   return errors;
               }
 
@@ -1276,12 +1309,17 @@ async function createPieChart(list, parentElement) {
                   return {data, errors};
               }
 
-              async function saveData(data) {
+              async function saveData(data, sync = false) {
+                  const products = [];
                   for (const asin in data) {
                       const key = `ASIN_${asin}`;
                       const existingData = await getValue(key);
                       const updatedData = existingData ? { ...JSON.parse(existingData), ...data[asin] } : data[asin];
-                      setValue(key, JSON.stringify(updatedData));
+                      await setValue(key, JSON.stringify(updatedData));
+                      products.push({ ...updatedData, ASIN: asin });
+                  }
+                  if (sync) {
+                      backendHandler.syncProducts(products);
                   }
               }
 
@@ -1295,7 +1333,7 @@ async function createPieChart(list, parentElement) {
                       const errors = await parseExcel(blobData);
 
                       const status = document.getElementById('status');
-                      status.textContent = `Extraction successful. Data is stored locally.`;
+                      status.textContent = `Extraction successful. Data synced and stored locally.`;
                       if (errors.length > 0) {
                           alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
                       }
@@ -1311,7 +1349,7 @@ async function createPieChart(list, parentElement) {
 
                     try {
                         const {data, errors} = parseOrdersTable();
-                        await saveData(data);
+                        await saveData(data, true);
 
                         const status = document.getElementById('status');
                         status.textContent = `Extraction successful. Number of items: ${Object.keys(data).length}`;
