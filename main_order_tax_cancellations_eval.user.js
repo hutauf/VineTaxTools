@@ -158,19 +158,23 @@ GM_addStyle(`
                   }
                   const data = { token, request: "delete_all" };
                   const endpoint = "data_operations";
+                  console.log("POST https://hutaufvine.pythonanywhere.com/" + endpoint, data);
                   GM_xmlhttpRequest({
                     method: "POST",
                     url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
                     headers: { "Content-Type": "application/json" },
                     data: JSON.stringify(data),
                     onload: function(response) {
+                      console.log("Response from " + endpoint + ":", response.status);
                       const result = JSON.parse(response.responseText);
-                      console.log(result);
                       if (result.status === "success") {
                         console.log("Database deleted successfully");
                       } else {
                         console.log("Failed to delete database");
                       }
+                    },
+                    onerror: function(error) {
+                      console.error("Network error while contacting " + endpoint + ":", error);
                     }
                   });
                 }
@@ -184,12 +188,14 @@ GM_addStyle(`
                   window.progressBar.setText('Pulling database from server now...');
                   const data = { token, request: "get_all" };
                   const endpoint = "data_operations";
+                  console.log("POST https://hutaufvine.pythonanywhere.com/" + endpoint, data);
                   GM_xmlhttpRequest({
                     method: "POST",
                     url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
                     headers: { "Content-Type": "application/json" },
                     data: JSON.stringify(data),
                     onload: async (response) => {
+                      console.log("Response from " + endpoint + ":", response.status);
                       if (response.status >= 200 && response.status < 300) {
                         const result = JSON.parse(response.responseText);
                         if (result.status === "success") {
@@ -215,7 +221,7 @@ GM_addStyle(`
                       }
                     },
                     onerror: function(error) {
-                      console.error("Error sending data to the server:", error);
+                      console.error("Network error while contacting " + endpoint + ":", error);
                     }
                   });
                 }
@@ -258,12 +264,14 @@ GM_addStyle(`
                   const data = { token, request: "update_asin", payload: asinData };
                   const endpoint = "data_operations";
 
+                  console.log("POST https://hutaufvine.pythonanywhere.com/" + endpoint, data);
                   GM_xmlhttpRequest({
                     method: "POST",
                     url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
                     headers: { "Content-Type": "application/json" },
                     data: JSON.stringify(data),
                     onload: function(response) {
+                      console.log("Response from " + endpoint + ":", response.status);
                       if (response.status >= 200 && response.status < 300) {
                         console.log("Data successfully sent to the server.");
                       } else {
@@ -272,7 +280,7 @@ GM_addStyle(`
                       }
                     },
                     onerror: function(error) {
-                      console.error("Error sending data to the server:", error);
+                      console.error("Network error while contacting " + endpoint + ":", error);
                     }
                   });
                 }
@@ -281,11 +289,18 @@ GM_addStyle(`
                   if (!Array.isArray(products) || products.length === 0) return;
 
                   const anonPayload = products.map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
+                  console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', anonPayload);
                   GM_xmlhttpRequest({
                     method: 'POST',
                     url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
                     headers: { 'Content-Type': 'application/json' },
-                    data: JSON.stringify(anonPayload)
+                    data: JSON.stringify(anonPayload),
+                    onload: (response) => {
+                      console.log('Response from upload_asins:', response.status);
+                    },
+                    onerror: (err) => {
+                      console.error('Network error while contacting upload_asins:', err);
+                    }
                   });
 
                   const token = await getValue("token");
@@ -296,11 +311,18 @@ GM_addStyle(`
                   const payload = products.map(p => ({ ASIN: p.ASIN, timestamp: 0, value: JSON.stringify(p) }));
                   const data = { token, request: 'update_asin', payload };
                   const endpoint = 'data_operations';
+                  console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
                   GM_xmlhttpRequest({
                     method: 'POST',
                     url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
                     headers: { 'Content-Type': 'application/json' },
-                    data: JSON.stringify(data)
+                    data: JSON.stringify(data),
+                    onload: (response) => {
+                      console.log('Response from ' + endpoint + ':', response.status);
+                    },
+                    onerror: (err) => {
+                      console.error('Network error while contacting ' + endpoint + ':', err);
+                    }
                   });
                 }
 
@@ -388,12 +410,14 @@ GM_addStyle(`
                             window.progressBar.setFillWidth(i*10);
                         }, 300*i);
                     }
+                    console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', tempDataToSend);
                     GM_xmlhttpRequest({
                       method: 'POST',
                       url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
                       headers: { 'Content-Type': 'application/json' },
                       data: JSON.stringify(tempDataToSend),
-                        onload: async function(response) {
+                      onload: async function(response) {
+                              console.log('Response from upload_asins:', response.status);
                               if (response.status >= 200 && response.status < 300) {
                                   console.log("Data successfully sent to the server.");
 
@@ -423,7 +447,7 @@ GM_addStyle(`
                               window.progressBar.hide();
                           },
                       onerror: function(error) {
-                          console.error("Error sending data to the server:", error);
+                          console.error("Network error while contacting upload_asins:", error);
                       }
                   });
                   }
@@ -1024,8 +1048,7 @@ async function createPieChart(list, parentElement) {
               const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
 
               if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5 && itemsWithoutTeilwert.length > 0) {
-                  let use_teilwert = item.myteilwert || item.teilwert;
-                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + use_teilwert, 0);
+                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + (item.myteilwert || item.teilwert), 0);
                   const estimatedTeilwert = itemsWithoutTeilwert.reduce((sum, item) => sum + (item.etv * avgTeilwertEtvRatio), 0);
                   const overallTeilwert = totalTeilwert + estimatedTeilwert;
 
@@ -1187,8 +1210,9 @@ async function createPieChart(list, parentElement) {
               async function fetchData(year) {
                   userlog("trying to fetch tax data from amazon")
                   const url = `https://www.amazon.de/vine/api/get-tax-report?year=${year}&fileType=XLSX`;
-                  userlog(url);
+                  console.log('GET ' + url);
                   const response = await fetch(url);
+                  console.log('Response from fetchData:', response.status);
                   const data = await response.json();
                   userlog("successfully received tax data")
                   return data.result.bytes;
@@ -1395,12 +1419,19 @@ async function createPieChart(list, parentElement) {
     function fetchPDF(url) {
         if (url && url.endsWith('.pdf')) {
             return new Promise((resolve, reject) => {
+            console.log('GET ' + url);
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: url,
                 responseType: 'arraybuffer',
-                onload: (response) => resolve(new Uint8Array(response.response)),
-                onerror: (err) => reject(err),
+                onload: (response) => {
+                    console.log('Response from fetchPDF:', response.status);
+                    resolve(new Uint8Array(response.response));
+                },
+                onerror: (err) => {
+                    console.error('Network error while fetching PDF:', err);
+                    reject(err);
+                },
             });
             });
         } else {
@@ -1410,10 +1441,12 @@ async function createPieChart(list, parentElement) {
 
     function loadScript(url) {
         return new Promise((resolve, reject) => {
+            console.log('GET ' + url);
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: url,
                 onload: function(response) {
+                    console.log('Response from loadScript:', response.status);
                     if (response.status >= 200 && response.status < 300) {
                         try {
                             // Execute the script in a new function scope to avoid polluting the global scope
@@ -1429,6 +1462,7 @@ async function createPieChart(list, parentElement) {
                     }
                 },
                 onerror: function(error) {
+                    console.error('Network error while loading script:', error);
                     reject("Network error: " + error);
                 }
             });
