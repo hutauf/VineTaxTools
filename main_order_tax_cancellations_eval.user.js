@@ -300,20 +300,61 @@ GM_addStyle(`
                 async syncProducts(products) {
                   if (!Array.isArray(products) || products.length === 0) return;
 
-                  const anonPayload = products.map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
-                  console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', anonPayload);
-                  GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
-                    headers: { 'Content-Type': 'application/json' },
-                    data: JSON.stringify(anonPayload),
-                    onload: (response) => {
-                      console.log('Response from upload_asins:', response.status);
-                    },
-                    onerror: (err) => {
-                      console.error('Network error while contacting upload_asins:', err);
-                    }
-                  });
+                  const anonPayload = products.filter(p => !p.pdf || p.pdf === 'NaN').map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
+                  if (anonPayload.length > 0) {
+                    console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', anonPayload);
+                    GM_xmlhttpRequest({
+                      method: 'POST',
+                      url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
+                      headers: { 'Content-Type': 'application/json' },
+                      data: JSON.stringify(anonPayload),
+                      onload: async (response) => {
+                        console.log('Response from upload_asins:', response.status);
+                        if (response.status >= 200 && response.status < 300) {
+                          try {
+                            const responseData = JSON.parse(response.responseText);
+                            if (responseData.existing_asins) {
+                              const payloadForPrivate = [];
+                              for (const existingAsin of responseData.existing_asins) {
+                                const asinKey = `ASIN_${existingAsin.asin}`;
+                                const updated = {
+                                  ...JSON.parse(await getValue(asinKey) || '{}'),
+                                  keepa: existingAsin.keepa,
+                                  teilwert: existingAsin.teilwert,
+                                  pdf: existingAsin.pdf
+                                };
+                                await setValue(asinKey, JSON.stringify(updated));
+                                payloadForPrivate.push({ ASIN: existingAsin.asin, timestamp: 0, value: JSON.stringify(updated) });
+                              }
+                              const token = await getValue('token');
+                              if (token && payloadForPrivate.length > 0) {
+                                const data = { token, request: 'update_asin', payload: payloadForPrivate };
+                                const endpoint = 'data_operations';
+                                console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
+                                GM_xmlhttpRequest({
+                                  method: 'POST',
+                                  url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
+                                  headers: { 'Content-Type': 'application/json' },
+                                  data: JSON.stringify(data),
+                                  onload: (resp) => {
+                                    console.log('Response from ' + endpoint + ':', resp.status);
+                                  },
+                                  onerror: (err) => {
+                                    console.error('Network error while contacting ' + endpoint + ':', err);
+                                  }
+                                });
+                              }
+                            }
+                          } catch (e) {
+                            console.log(e);
+                          }
+                        }
+                      },
+                      onerror: (err) => {
+                        console.error('Network error while contacting upload_asins:', err);
+                      }
+                    });
+                  }
 
                   const token = await getValue("token");
                   if (!token) {
@@ -406,11 +447,13 @@ GM_addStyle(`
                       });
 
 
-                    tempDataToSend.push({
-                        ASIN: asin,
-                        name: parsedData.name,
-                        ETV: parsedData.etv
-                    });
+                    if (!parsedData.pdf || parsedData.pdf === 'NaN') {
+                        tempDataToSend.push({
+                            ASIN: asin,
+                            name: parsedData.name,
+                            ETV: parsedData.etv
+                        });
+                    }
 
                   };
 
@@ -436,19 +479,41 @@ GM_addStyle(`
                                     try {
                                       const responseData = JSON.parse(response.responseText);
                                       if (responseData.existing_asins) {
+                                          const payloadForPrivate = [];
                                           for (const existingAsin of responseData.existing_asins) {
                                             window.progressBar.setText("upload successful, updating local data now (" + (responseData.existing_asins.indexOf(existingAsin) + 1) + "/" + responseData.existing_asins.length + ")");
                                             window.progressBar.setFillWidth(((responseData.existing_asins.indexOf(existingAsin) + 1) / responseData.existing_asins.length) * 100);
                                             const asinKey = `ASIN_${existingAsin.asin}`;
-                                               await setValue(asinKey, JSON.stringify({
+                                            const updated = {
                                                   ...JSON.parse(await getValue(asinKey) || '{}') ,
                                                   keepa: existingAsin.keepa,
                                                   teilwert: existingAsin.teilwert,
                                                   pdf: existingAsin.pdf
-                                                  }));
+                                            };
+                                            await setValue(asinKey, JSON.stringify(updated));
+                                            payloadForPrivate.push({ ASIN: existingAsin.asin, timestamp: 0, value: JSON.stringify(updated) });
+                                          }
+
+                                          const token = await getValue('token');
+                                          if (token && payloadForPrivate.length > 0) {
+                                            const data = { token, request: 'update_asin', payload: payloadForPrivate };
+                                            const endpoint = 'data_operations';
+                                            console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
+                                            GM_xmlhttpRequest({
+                                              method: 'POST',
+                                              url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
+                                              headers: { 'Content-Type': 'application/json' },
+                                              data: JSON.stringify(data),
+                                              onload: (resp) => {
+                                                console.log('Response from ' + endpoint + ':', resp.status);
+                                              },
+                                              onerror: (err) => {
+                                                console.error('Network error while contacting ' + endpoint + ':', err);
                                               }
+                                            });
                                           }
                                       }
+                                    }
                                   catch(e){
                                     console.log(e);
                                   }
