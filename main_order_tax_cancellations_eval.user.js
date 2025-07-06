@@ -300,7 +300,12 @@ GM_addStyle(`
                 async syncProducts(products) {
                   if (!Array.isArray(products) || products.length === 0) return;
 
-                  const anonPayload = products.filter(p => !p.pdf || p.pdf === 'NaN').map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
+                  const lastFullSync = await getValue('last_full_sync', 0);
+                  const needFullSync = Date.now() - lastFullSync > 7 * 24 * 60 * 60 * 1000;
+
+                  const anonPayload = products
+                    .filter(p => needFullSync || !p.pdf || p.pdf === 'NaN')
+                    .map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
                   if (anonPayload.length > 0) {
                     console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', anonPayload);
                     GM_xmlhttpRequest({
@@ -347,6 +352,9 @@ GM_addStyle(`
                             }
                           } catch (e) {
                             console.log(e);
+                          }
+                          if (needFullSync) {
+                            await setValue('last_full_sync', Date.now());
                           }
                         }
                       },
@@ -420,6 +428,9 @@ GM_addStyle(`
                   let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
                   console.log(asinKeys.length)
 
+                  const lastFullSync = await getValue('last_full_sync', 0);
+                  const needFullSync = Date.now() - lastFullSync > 7 * 24 * 60 * 60 * 1000;
+
                   let asinDataAll = await getAllAsinValues();
 
                   let asinData = [];
@@ -447,7 +458,7 @@ GM_addStyle(`
                       });
 
 
-                    if (!parsedData.pdf || parsedData.pdf === 'NaN') {
+                    if (needFullSync || !parsedData.pdf || parsedData.pdf === 'NaN') {
                         tempDataToSend.push({
                             ASIN: asin,
                             name: parsedData.name,
@@ -466,7 +477,7 @@ GM_addStyle(`
                         }, 300*i);
                     }
                     console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', tempDataToSend);
-                    GM_xmlhttpRequest({
+                  GM_xmlhttpRequest({
                       method: 'POST',
                       url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
                       headers: { 'Content-Type': 'application/json' },
@@ -475,6 +486,9 @@ GM_addStyle(`
                               console.log('Response from upload_asins:', response.status);
                               if (response.status >= 200 && response.status < 300) {
                                   console.log("Data successfully sent to the server.");
+                                  if (needFullSync) {
+                                      await setValue('last_full_sync', Date.now());
+                                  }
 
                                     try {
                                       const responseData = JSON.parse(response.responseText);
