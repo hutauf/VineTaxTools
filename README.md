@@ -17,6 +17,7 @@ Inwieweit dieses Tool wirklich hilfreich ist, kann ich nicht beurteilen, da die 
 3. Klicke auf **Raw**, um den Skript-Quelltext anzuzeigen.
 4. Violentmonkey erkennt das Skript automatisch und bietet die Installation an.
 5. Bestätige mit **Installieren**.
+6. Durch den im Skript hinterlegten `@updateURL` wird bei neuen Versionen automatisch ein Update angeboten.
 
 ## Verfügbare Skripte
 

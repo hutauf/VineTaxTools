@@ -18,6 +18,8 @@
 // @grant       GM_deleteValue
 // @grant       GM_listValues
 // @grant       GM_setClipboard
+// @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
+// @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @version     1.111111
 // @author      -
 // @description 09.01.2025
@@ -116,20 +118,34 @@ GM_addStyle(`
               function parseDateSafe(dateStr) {
                 if (!dateStr) return null;
                 let trimmed = dateStr.trim();
-                let parsed = new Date(trimmed);
-                if (!isNaN(parsed)) return parsed;
 
-                trimmed = trimmed.split(',')[0];
-                trimmed = trimmed.replace(/\//g, '.').replace(/\s+/g, ' ').trim();
+                // remove time or other trailing parts
+                trimmed = trimmed.split(/[ ,]/)[0];
 
-                const numericParts = trimmed.split('.');
-                if (numericParts.length === 3 && numericParts[0] && numericParts[1] && numericParts[2]) {
-                  const day = numericParts[0].padStart(2, '0');
-                  const month = numericParts[1].padStart(2, '0');
-                  const year = numericParts[2];
-                  parsed = new Date(`${year}-${month}-${day}`);
+                // formats DD[./-]MM[./-]YYYY or DD[./-]MM[./-]YY
+                let match = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+                if (match) {
+                  let day = match[1].padStart(2, '0');
+                  let month = match[2].padStart(2, '0');
+                  let year = match[3];
+                  if (year.length === 2) year = '20' + year;
+                  const parsed = new Date(`${year}-${month}-${day}`);
                   if (!isNaN(parsed)) return parsed;
                 }
+
+                // formats YYYY[./-]MM[./-]DD or YY[./-]MM[./-]DD
+                match = trimmed.match(/^(\d{2,4})[./-](\d{1,2})[./-](\d{1,2})$/);
+                if (match) {
+                  let year = match[1];
+                  let month = match[2].padStart(2, '0');
+                  let day = match[3].padStart(2, '0');
+                  if (year.length === 2) year = '20' + year;
+                  const parsed = new Date(`${year}-${month}-${day}`);
+                  if (!isNaN(parsed)) return parsed;
+                }
+
+                // textual month names e.g. 1. Januar 2024
+                trimmed = trimmed.replace(/\//g, '.').replace(/\s+/g, ' ').trim();
 
                 const monthNames = {
                   'Januar':1,'Februar':2,'März':3,'Maerz':3,'April':4,'Mai':5,
@@ -140,8 +156,14 @@ GM_addStyle(`
                   const day = match_[1].padStart(2, '0');
                   const monthIndex = monthNames[match_[2]];
                   const year = match_[3];
+                const match = trimmed.match(/(\d{1,2})\.?\s*([A-Za-zäöüÄÖÜß]+)\s*(\d{2,4})/);
+                if (match) {
+                  const day = match[1].padStart(2, '0');
+                  const monthIndex = monthNames[match[2]];
+                  let year = match[3];
+                  if (year.length === 2) year = '20' + year;
                   if (monthIndex) {
-                    parsed = new Date(`${year}-${String(monthIndex).padStart(2,'0')}-${day}`);
+                    const parsed = new Date(`${year}-${String(monthIndex).padStart(2,'0')}-${day}`);
                     if (!isNaN(parsed)) return parsed;
                   }
                 }
@@ -149,141 +171,263 @@ GM_addStyle(`
                 return null;
               }
 
-              async function delete_database_with_token() {
-                let token = await getValue("token");
-                if (!token) {
+              class PrivateBackendHandler {
+                async deleteDatabase() {
+                  const token = await getValue("token");
+                  if (!token) {
                     console.log("No token found");
                     return;
-                }
-                let data = {"token": token, "request": "delete_all"};
-                let endpoint = "data_operations";
-                GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
-                    headers: { 'Content-Type': 'application/json' },
+                  }
+                  const data = { token, request: "delete_all" };
+                  const endpoint = "data_operations";
+                  console.log("POST https://hutaufvine.pythonanywhere.com/" + endpoint, data);
+                  GM_xmlhttpRequest({
+                    method: "POST",
+                    url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
+                    headers: { "Content-Type": "application/json" },
                     data: JSON.stringify(data),
                     onload: function(response) {
-                        let result = JSON.parse(response.responseText);
-                        console.log(result);
-                        if (result.status === "success") {
-                            console.log("Database deleted successfully");
-                        } else {
-                            console.log("Failed to delete database");
-                        }
-                    }
-                });
-              }
-
-              async function download_database_with_token() {
-                let token = await getValue("token");
-                if (!token) {
-                    console.log("No token found");
-                    return;
-                }
-                window.progressBar.setText('Pulling database from server now...');
-                let data = {"token": token, "request": "get_all"};
-                let endpoint = "data_operations";
-                GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
-                    headers: { 'Content-Type': 'application/json' },
-                    data: JSON.stringify(data),
-                    onload: async function(response) {
-                        if (response.status >= 200 && response.status < 300) {
-                            let result = JSON.parse(response.responseText);
-                            if (result.status === "success") {
-                                let asinData = result.data;
-                                for (let asin of asinData) {
-                                    let local_data = await getValue("ASIN_" + asin.ASIN);
-                                    if (local_data) {
-                                        let local_timestamp = local_data.timestamp ? local_data.timestamp : 0;
-                                        let remote_timestamp = asin.timestamp ? asin.timestamp : 0;
-                                        if (remote_timestamp > local_timestamp) {
-                                            await setValue("ASIN_" + asin.ASIN, asin.value);
-                                        }
-                                    } else {
-                                        await setValue("ASIN_" + asin.ASIN, asin.value);
-                                    }
-                                }
-                                console.log("Database downloaded successfully");
-                            } else {
-                                console.log("Failed to download database");
-                            }
-                        } else {
-                            console.error("Failed to send data to the server.");
-                        }
+                      console.log("Response from " + endpoint + ":", response.status);
+                      const result = JSON.parse(response.responseText);
+                      if (result.status === "success") {
+                        console.log("Database deleted successfully");
+                      } else {
+                        console.log("Failed to delete database");
+                      }
                     },
                     onerror: function(error) {
-                        console.error("Error sending data to the server:", error);
+                      console.error("Network error while contacting " + endpoint + ":", error);
                     }
-                });
-              }
+                  });
+                }
 
-              async function upload_local_database_with_token() {
-                let token = await getValue("token");
-                if (!token) {
+                async downloadDatabase() {
+                  const token = await getValue("token");
+                  if (!token) {
                     console.log("No token found");
                     return;
+                  }
+                  window.progressBar.setText('Pulling database from server now...');
+                  const data = { token, request: "get_all" };
+                  const endpoint = "data_operations";
+                  console.log("POST https://hutaufvine.pythonanywhere.com/" + endpoint, data);
+                  GM_xmlhttpRequest({
+                    method: "POST",
+                    url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
+                    headers: { "Content-Type": "application/json" },
+                    data: JSON.stringify(data),
+                    onload: async (response) => {
+                      console.log("Response from " + endpoint + ":", response.status);
+                      if (response.status >= 200 && response.status < 300) {
+                        const result = JSON.parse(response.responseText);
+                        if (result.status === "success") {
+                          const asinData = result.data;
+                          for (const asin of asinData) {
+                            const local_data = await getValue("ASIN_" + asin.ASIN);
+                            if (local_data) {
+                              const local_timestamp = local_data.timestamp ? local_data.timestamp : 0;
+                              const remote_timestamp = asin.timestamp ? asin.timestamp : 0;
+                              if (remote_timestamp > local_timestamp) {
+                                await setValue("ASIN_" + asin.ASIN, asin.value);
+                              }
+                            } else {
+                              await setValue("ASIN_" + asin.ASIN, asin.value);
+                            }
+                          }
+                          console.log("Database downloaded successfully");
+                        } else {
+                          console.log("Failed to download database");
+                        }
+                      } else {
+                        console.error("Failed to send data to the server.");
+                      }
+                    },
+                    onerror: function(error) {
+                      console.error("Network error while contacting " + endpoint + ":", error);
+                    }
+                  });
                 }
-                window.progressBar.setText('Pushing database to server now...');
-                let keys = await listValues();
-                let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
-                console.log(asinKeys.length)
 
-                let asinDataAll = await getAllAsinValues();
+                async uploadLocalDatabase() {
+                  const token = await getValue("token");
+                  if (!token) {
+                    console.log("No token found");
+                    return;
+                  }
+                  window.progressBar.setText('Pushing database to server now...');
+                  const keys = await listValues();
+                  const asinKeys = keys.filter(key => key.startsWith("ASIN_"));
 
-                let asinData = [];
+                  const asinDataAll = await getAllAsinValues();
+                  const asinData = [];
 
-                for (let asinKey of asinKeys) {
-                    let asin = asinKey.replace("ASIN_", "");
+                  for (const asinKey of asinKeys) {
+                    const asin = asinKey.replace("ASIN_", "");
                     window.progressBar.setText(`Loading data for ASIN ${asin}... (${asinKeys.indexOf(asinKey) + 1}/${asinKeys.length})`);
                     window.progressBar.setFillWidth(((asinKeys.indexOf(asinKey) + 1) / asinKeys.length) * 100);
 
-                    let jsonData = asinDataAll[asinKey]; //await getValue(asinKey);
-
-                    let parsedData = jsonData ? JSON.parse(jsonData) : {};
-                    let [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
-                    let jsDate = new Date(Date.UTC(year, month-1, day));
+                    const jsonData = asinDataAll[asinKey];
+                    const parsedData = jsonData ? JSON.parse(jsonData) : {};
+                    const jsDate = parseDateSafe(parsedData.date);
                     try {
-                        parsedData.date = jsDate.toISOString();
+                      parsedData.date = jsDate.toISOString();
                     } catch (error) {
                       console.log("error loading date, probably page not fully loaded");
-                        continue;
+                      continue;
                     }
-                    // now we produce a structure like this:
-                    let value = JSON.stringify(parsedData);
                     asinData.push({
-                        ASIN: asin,
-                        timestamp: 0,
-                        value: value
+                      ASIN: asin,
+                      timestamp: 0,
+                      value: JSON.stringify(parsedData)
                     });
+                  }
 
+                  const data = { token, request: "update_asin", payload: asinData };
+                  const endpoint = "data_operations";
+
+                  console.log("POST https://hutaufvine.pythonanywhere.com/" + endpoint, data);
+                  GM_xmlhttpRequest({
+                    method: "POST",
+                    url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
+                    headers: { "Content-Type": "application/json" },
+                    data: JSON.stringify(data),
+                    onload: function(response) {
+                      console.log("Response from " + endpoint + ":", response.status);
+                      if (response.status >= 200 && response.status < 300) {
+                        console.log("Data successfully sent to the server.");
+                      } else {
+                        console.log(response.text);
+                        console.error("Failed to send data to the server.");
+                      }
+                    },
+                    onerror: function(error) {
+                      console.error("Network error while contacting " + endpoint + ":", error);
+                    }
+                  });
                 }
 
-                console.log("data to upload", asinData);
+                async syncProducts(products) {
+                  if (!Array.isArray(products) || products.length === 0) return;
 
+                  const lastFullSync = await getValue('last_full_sync', 0);
+                  const needFullSync = Date.now() - lastFullSync > 7 * 24 * 60 * 60 * 1000;
 
-                let data = {"token": token, "request": "update_asin", "payload": asinData};
-                let endpoint = "data_operations";
+                  const anonPayload = products
+                    .filter(p => needFullSync || !p.pdf || p.pdf === 'NaN')
+                    .map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
+                  if (anonPayload.length > 0) {
+                    console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', anonPayload);
+                    GM_xmlhttpRequest({
+                      method: 'POST',
+                      url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
+                      headers: { 'Content-Type': 'application/json' },
+                      data: JSON.stringify(anonPayload),
+                      onload: async (response) => {
+                        console.log('Response from upload_asins:', response.status);
+                        if (response.status >= 200 && response.status < 300) {
+                          try {
+                            const responseData = JSON.parse(response.responseText);
+                            if (responseData.existing_asins) {
+                              const payloadForPrivate = [];
+                              for (const existingAsin of responseData.existing_asins) {
+                                const asinKey = `ASIN_${existingAsin.asin}`;
+                                const updated = {
+                                  ...JSON.parse(await getValue(asinKey) || '{}'),
+                                  keepa: existingAsin.keepa,
+                                  teilwert: existingAsin.teilwert,
+                                  pdf: existingAsin.pdf
+                                };
+                                await setValue(asinKey, JSON.stringify(updated));
+                                payloadForPrivate.push({ ASIN: existingAsin.asin, timestamp: 0, value: JSON.stringify(updated) });
+                              }
+                              const token = await getValue('token');
+                              if (token && payloadForPrivate.length > 0) {
+                                const data = { token, request: 'update_asin', payload: payloadForPrivate };
+                                const endpoint = 'data_operations';
+                                console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
+                                GM_xmlhttpRequest({
+                                  method: 'POST',
+                                  url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
+                                  headers: { 'Content-Type': 'application/json' },
+                                  data: JSON.stringify(data),
+                                  onload: (resp) => {
+                                    console.log('Response from ' + endpoint + ':', resp.status);
+                                  },
+                                  onerror: (err) => {
+                                    console.error('Network error while contacting ' + endpoint + ':', err);
+                                  }
+                                });
+                              }
+                            }
+                          } catch (e) {
+                            console.log(e);
+                          }
+                          if (needFullSync) {
+                            await setValue('last_full_sync', Date.now());
+                          }
+                        }
+                      },
+                      onerror: (err) => {
+                        console.error('Network error while contacting upload_asins:', err);
+                      }
+                    });
+                  }
 
-                GM_xmlhttpRequest({
+                  const token = await getValue("token");
+                  if (!token) {
+                    console.log("No token found");
+                    return;
+                  }
+                  const payload = products.map(p => ({ ASIN: p.ASIN, timestamp: 0, value: JSON.stringify(p) }));
+                  const data = { token, request: 'update_asin', payload };
+                  const endpoint = 'data_operations';
+                  console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
+                  GM_xmlhttpRequest({
                     method: 'POST',
                     url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
                     headers: { 'Content-Type': 'application/json' },
                     data: JSON.stringify(data),
-                    onload: function(response) {
-                        if (response.status >= 200 && response.status < 300) {
-                            console.log("Data successfully sent to the server.");
-                        } else {
-                            console.log(response.text);
-                            console.error("Failed to send data to the server.");
-                        }
+                    onload: (response) => {
+                      console.log('Response from ' + endpoint + ':', response.status);
                     },
-                    onerror: function(error) {
-                        console.error("Error sending data to the server:", error);
+                    onerror: (err) => {
+                      console.error('Network error while contacting ' + endpoint + ':', err);
                     }
-                });
-            }
+                  });
+                }
+
+                createButtons() {
+                  const container = document.createElement('div');
+                  container.innerHTML = `
+                    <button id="setTokenButton" style="margin-top: 10px;">Set token</button>
+                    <button id="uploadButton" style="margin-top: 10px;">Upload data</button>
+                    <button id="downloadButton" style="margin-top: 10px;">Download data</button>
+                    <button id="deleteButton" style="margin-top: 10px;">Delete data</button>
+                  `;
+
+                  container.querySelector('#setTokenButton').addEventListener('click', async () => {
+                    const token = prompt('Enter token:');
+                    await setValue('token', token);
+                  });
+
+                  container.querySelector('#uploadButton').addEventListener('click', async () => {
+                    await this.uploadLocalDatabase();
+                  });
+
+                  container.querySelector('#downloadButton').addEventListener('click', async () => {
+                    await this.downloadDatabase();
+                  });
+
+                  container.querySelector('#deleteButton').addEventListener('click', async () => {
+                    await this.deleteDatabase();
+                  });
+
+                  return container;
+                }
+              }
+
+              const backendHandler = new PrivateBackendHandler();
+
 
 
 
@@ -292,6 +436,9 @@ GM_addStyle(`
                   let keys = await listValues();
                   let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
                   console.log(asinKeys.length)
+
+                  const lastFullSync = await getValue('last_full_sync', 0);
+                  const needFullSync = Date.now() - lastFullSync > 7 * 24 * 60 * 60 * 1000;
 
                   let asinDataAll = await getAllAsinValues();
 
@@ -320,11 +467,13 @@ GM_addStyle(`
                       });
 
 
-                    tempDataToSend.push({
-                        ASIN: asin,
-                        name: parsedData.name,
-                        ETV: parsedData.etv
-                    });
+                    if (needFullSync || !parsedData.pdf || parsedData.pdf === 'NaN') {
+                        tempDataToSend.push({
+                            ASIN: asin,
+                            name: parsedData.name,
+                            ETV: parsedData.etv
+                        });
+                    }
 
                   };
 
@@ -336,31 +485,58 @@ GM_addStyle(`
                             window.progressBar.setFillWidth(i*10);
                         }, 300*i);
                     }
-                    GM_xmlhttpRequest({
+                    console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', tempDataToSend);
+                  GM_xmlhttpRequest({
                       method: 'POST',
                       url: 'https://hutaufvine.pythonanywhere.com/upload_asins',
                       headers: { 'Content-Type': 'application/json' },
                       data: JSON.stringify(tempDataToSend),
-                        onload: async function(response) {
+                      onload: async function(response) {
+                              console.log('Response from upload_asins:', response.status);
                               if (response.status >= 200 && response.status < 300) {
                                   console.log("Data successfully sent to the server.");
+                                  if (needFullSync) {
+                                      await setValue('last_full_sync', Date.now());
+                                  }
 
                                     try {
                                       const responseData = JSON.parse(response.responseText);
                                       if (responseData.existing_asins) {
+                                          const payloadForPrivate = [];
                                           for (const existingAsin of responseData.existing_asins) {
                                             window.progressBar.setText("upload successful, updating local data now (" + (responseData.existing_asins.indexOf(existingAsin) + 1) + "/" + responseData.existing_asins.length + ")");
                                             window.progressBar.setFillWidth(((responseData.existing_asins.indexOf(existingAsin) + 1) / responseData.existing_asins.length) * 100);
                                             const asinKey = `ASIN_${existingAsin.asin}`;
-                                               await setValue(asinKey, JSON.stringify({
+                                            const updated = {
                                                   ...JSON.parse(await getValue(asinKey) || '{}') ,
                                                   keepa: existingAsin.keepa,
                                                   teilwert: existingAsin.teilwert,
                                                   pdf: existingAsin.pdf
-                                                  }));
+                                            };
+                                            await setValue(asinKey, JSON.stringify(updated));
+                                            payloadForPrivate.push({ ASIN: existingAsin.asin, timestamp: 0, value: JSON.stringify(updated) });
+                                          }
+
+                                          const token = await getValue('token');
+                                          if (token && payloadForPrivate.length > 0) {
+                                            const data = { token, request: 'update_asin', payload: payloadForPrivate };
+                                            const endpoint = 'data_operations';
+                                            console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
+                                            GM_xmlhttpRequest({
+                                              method: 'POST',
+                                              url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
+                                              headers: { 'Content-Type': 'application/json' },
+                                              data: JSON.stringify(data),
+                                              onload: (resp) => {
+                                                console.log('Response from ' + endpoint + ':', resp.status);
+                                              },
+                                              onerror: (err) => {
+                                                console.error('Network error while contacting ' + endpoint + ':', err);
                                               }
+                                            });
                                           }
                                       }
+                                    }
                                   catch(e){
                                     console.log(e);
                                   }
@@ -371,7 +547,7 @@ GM_addStyle(`
                               window.progressBar.hide();
                           },
                       onerror: function(error) {
-                          console.error("Error sending data to the server:", error);
+                          console.error("Network error while contacting upload_asins:", error);
                       }
                   });
                   }
@@ -393,7 +569,7 @@ GM_addStyle(`
                         const errors = await parseExcel(blobData);
 
                         const status = document.getElementById('status');
-                        status.textContent = `Extraction successful. Data is stored locally.`;
+                        status.textContent = `Extraction successful. Data synced and stored locally.`;
                         if (errors.length > 0) {
                             alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
                         }
@@ -490,14 +666,11 @@ GM_addStyle(`
                                     <option value="only 2024" ${settings.yearFilter === "only 2024" ? 'selected' : ''}>Only 2024</option>
                                     <option value="only 2025" ${settings.yearFilter === "only 2025" ? 'selected' : ''}>Only 2025</option>
                                 </select>
-                                <button id="setTokenButton" style="margin-top: 10px;">Set token</button>
-                                <button id="uploadButton" style="margin-top: 10px;">Upload data</button>
-                                <button id="downloadButton" style="margin-top: 10px;">Download data</button>
-                                <button id="deleteButton" style="margin-top: 10px;">Delete data</button>
 
                             </div>
                         `;
 
+                        settingsDiv.appendChild(backendHandler.createButtons());
                         div.appendChild(settingsDiv);
                         container.appendChild(div);
 
@@ -554,22 +727,6 @@ GM_addStyle(`
                             await setValue("settings", settings);
                         });
 
-                        document.getElementById('setTokenButton').addEventListener('click', async () => {
-                            const token = prompt("Enter token:");
-                            await setValue("token", token);
-                        });
-
-                        document.getElementById('uploadButton').addEventListener('click', async () => {
-                            await upload_local_database_with_token();
-                        });
-
-                        document.getElementById('downloadButton').addEventListener('click', async () => {
-                            await download_database_with_token();
-                        });
-
-                        document.getElementById('deleteButton').addEventListener('click', async () => {
-                            await delete_database_with_token();
-                        });
 
 
                 document.getElementById('export-db').addEventListener('click', async () => {
@@ -991,8 +1148,7 @@ async function createPieChart(list, parentElement) {
               const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
 
               if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5 && itemsWithoutTeilwert.length > 0) {
-                  let use_teilwert = item.myteilwert || item.teilwert;
-                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + use_teilwert, 0);
+                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + (item.myteilwert || item.teilwert), 0);
                   const estimatedTeilwert = itemsWithoutTeilwert.reduce((sum, item) => sum + (item.etv * avgTeilwertEtvRatio), 0);
                   const overallTeilwert = totalTeilwert + estimatedTeilwert;
 
@@ -1154,8 +1310,9 @@ async function createPieChart(list, parentElement) {
               async function fetchData(year) {
                   userlog("trying to fetch tax data from amazon")
                   const url = `https://www.amazon.de/vine/api/get-tax-report?year=${year}&fileType=XLSX`;
-                  userlog(url);
+                  console.log('GET ' + url);
                   const response = await fetch(url);
+                  console.log('Response from fetchData:', response.status);
                   const data = await response.json();
                   userlog("successfully received tax data")
                   return data.result.bytes;
@@ -1176,7 +1333,7 @@ async function createPieChart(list, parentElement) {
                   const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
                   console.log(json);
                   const {data: extractedData, errors} = await extractData(json);
-                  await saveData(extractedData);
+                  await saveData(extractedData, true);
                   return errors;
               }
 
@@ -1276,12 +1433,17 @@ async function createPieChart(list, parentElement) {
                   return {data, errors};
               }
 
-              async function saveData(data) {
+              async function saveData(data, sync = false) {
+                  const products = [];
                   for (const asin in data) {
                       const key = `ASIN_${asin}`;
                       const existingData = await getValue(key);
                       const updatedData = existingData ? { ...JSON.parse(existingData), ...data[asin] } : data[asin];
-                      setValue(key, JSON.stringify(updatedData));
+                      await setValue(key, JSON.stringify(updatedData));
+                      products.push({ ...updatedData, ASIN: asin });
+                  }
+                  if (sync) {
+                      backendHandler.syncProducts(products);
                   }
               }
 
@@ -1295,7 +1457,7 @@ async function createPieChart(list, parentElement) {
                       const errors = await parseExcel(blobData);
 
                       const status = document.getElementById('status');
-                      status.textContent = `Extraction successful. Data is stored locally.`;
+                      status.textContent = `Extraction successful. Data synced and stored locally.`;
                       if (errors.length > 0) {
                           alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
                       }
@@ -1311,7 +1473,7 @@ async function createPieChart(list, parentElement) {
 
                     try {
                         const {data, errors} = parseOrdersTable();
-                        await saveData(data);
+                        await saveData(data, true);
 
                         const status = document.getElementById('status');
                         status.textContent = `Extraction successful. Number of items: ${Object.keys(data).length}`;
@@ -1357,12 +1519,19 @@ async function createPieChart(list, parentElement) {
     function fetchPDF(url) {
         if (url && url.endsWith('.pdf')) {
             return new Promise((resolve, reject) => {
+            console.log('GET ' + url);
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: url,
                 responseType: 'arraybuffer',
-                onload: (response) => resolve(new Uint8Array(response.response)),
-                onerror: (err) => reject(err),
+                onload: (response) => {
+                    console.log('Response from fetchPDF:', response.status);
+                    resolve(new Uint8Array(response.response));
+                },
+                onerror: (err) => {
+                    console.error('Network error while fetching PDF:', err);
+                    reject(err);
+                },
             });
             });
         } else {
@@ -1372,10 +1541,12 @@ async function createPieChart(list, parentElement) {
 
     function loadScript(url) {
         return new Promise((resolve, reject) => {
+            console.log('GET ' + url);
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: url,
                 onload: function(response) {
+                    console.log('Response from loadScript:', response.status);
                     if (response.status >= 200 && response.status < 300) {
                         try {
                             // Execute the script in a new function scope to avoid polluting the global scope
@@ -1391,6 +1562,7 @@ async function createPieChart(list, parentElement) {
                     }
                 },
                 onerror: function(error) {
+                    console.error('Network error while loading script:', error);
                     reject("Network error: " + error);
                 }
             });
