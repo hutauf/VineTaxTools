@@ -119,43 +119,46 @@ GM_addStyle(`
                 if (!dateStr) return null;
                 let trimmed = dateStr.trim();
 
-                // check german format first to avoid wrong interpretation
-                let matchNumeric = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
-                if (matchNumeric) {
-                  const day = matchNumeric[1].padStart(2, '0');
-                  const month = matchNumeric[2].padStart(2, '0');
-                  let year = matchNumeric[3];
+                // remove time or other trailing parts
+                trimmed = trimmed.split(/[ ,]/)[0];
+
+                // formats DD[./-]MM[./-]YYYY or DD[./-]MM[./-]YY
+                let match = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+                if (match) {
+                  let day = match[1].padStart(2, '0');
+                  let month = match[2].padStart(2, '0');
+                  let year = match[3];
                   if (year.length === 2) year = '20' + year;
-                  let parsed = new Date(`${year}-${month}-${day}`);
+                  const parsed = new Date(`${year}-${month}-${day}`);
                   if (!isNaN(parsed)) return parsed;
                 }
 
-                let parsed = new Date(trimmed);
-                if (!isNaN(parsed)) return parsed;
+                // formats YYYY[./-]MM[./-]DD or YY[./-]MM[./-]DD
+                match = trimmed.match(/^(\d{2,4})[./-](\d{1,2})[./-](\d{1,2})$/);
+                if (match) {
+                  let year = match[1];
+                  let month = match[2].padStart(2, '0');
+                  let day = match[3].padStart(2, '0');
+                  if (year.length === 2) year = '20' + year;
+                  const parsed = new Date(`${year}-${month}-${day}`);
+                  if (!isNaN(parsed)) return parsed;
+                }
 
-                trimmed = trimmed.split(',')[0];
+                // textual month names e.g. 1. Januar 2024
                 trimmed = trimmed.replace(/\//g, '.').replace(/\s+/g, ' ').trim();
-
-                const numericParts = trimmed.split('.');
-                if (numericParts.length === 3 && numericParts[0] && numericParts[1] && numericParts[2]) {
-                  const day = numericParts[0].padStart(2, '0');
-                  const month = numericParts[1].padStart(2, '0');
-                  const year = numericParts[2];
-                  parsed = new Date(`${year}-${month}-${day}`);
-                  if (!isNaN(parsed)) return parsed;
-                }
 
                 const monthNames = {
                   'Januar':1,'Februar':2,'März':3,'Maerz':3,'April':4,'Mai':5,
                   'Juni':6,'Juli':7,'August':8,'September':9,'Oktober':10,'November':11,'Dezember':12
                 };
-                const match = trimmed.match(/(\d{1,2})\.?\s*([A-Za-zäöüÄÖÜß]+)\s*(\d{4})/);
+                const match = trimmed.match(/(\d{1,2})\.?\s*([A-Za-zäöüÄÖÜß]+)\s*(\d{2,4})/);
                 if (match) {
                   const day = match[1].padStart(2, '0');
                   const monthIndex = monthNames[match[2]];
-                  const year = match[3];
+                  let year = match[3];
+                  if (year.length === 2) year = '20' + year;
                   if (monthIndex) {
-                    parsed = new Date(`${year}-${String(monthIndex).padStart(2,'0')}-${day}`);
+                    const parsed = new Date(`${year}-${String(monthIndex).padStart(2,'0')}-${day}`);
                     if (!isNaN(parsed)) return parsed;
                   }
                 }
@@ -260,8 +263,7 @@ GM_addStyle(`
 
                     const jsonData = asinDataAll[asinKey];
                     const parsedData = jsonData ? JSON.parse(jsonData) : {};
-                    const [day, month, year] = parsedData.date.replace(/\//g, '.').split('.');
-                    const jsDate = new Date(Date.UTC(year, month - 1, day));
+                    const jsDate = parseDateSafe(parsedData.date);
                     try {
                       parsedData.date = jsDate.toISOString();
                     } catch (error) {
