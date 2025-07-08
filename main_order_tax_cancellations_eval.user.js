@@ -119,6 +119,12 @@ GM_addStyle(`
                 if (!dateStr) return null;
                 let trimmed = dateStr.trim();
 
+                // if first 4 digits are a year, assume YYYY-MM-DD format
+                if (/^\d{4}/.test(trimmed)) {
+                    const parsed = new Date(trimmed);
+                    if (!isNaN(parsed)) return parsed;
+                }
+
                 // remove time or other trailing parts
                 trimmed = trimmed.split(/[ ,]/)[0];
 
@@ -151,12 +157,8 @@ GM_addStyle(`
                   'Januar':1,'Februar':2,'März':3,'Maerz':3,'April':4,'Mai':5,
                   'Juni':6,'Juli':7,'August':8,'September':9,'Oktober':10,'November':11,'Dezember':12
                 };
-                const match_ = trimmed.match(/(\d{1,2})\.?\s*([A-Za-zäöüÄÖÜß]+)\s*(\d{4})/);
-                if (match_) {
-                  const day = match_[1].padStart(2, '0');
-                  const monthIndex = monthNames[match_[2]];
-                  const year = match_[3];
-                const match = trimmed.match(/(\d{1,2})\.?\s*([A-Za-zäöüÄÖÜß]+)\s*(\d{2,4})/);
+
+                match = trimmed.match(/(\d{1,2})\.?\s*([A-Za-zäöüÄÖÜß]+)\s*(\d{2,4})/);
                 if (match) {
                   const day = match[1].padStart(2, '0');
                   const monthIndex = monthNames[match[2]];
