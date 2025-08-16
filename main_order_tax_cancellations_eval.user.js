@@ -331,8 +331,9 @@ GM_addStyle(`
                   const lastFullSync = await getValue('last_full_sync', 0);
                   const needFullSync = Date.now() - lastFullSync > 7 * 24 * 60 * 60 * 1000;
 
+                  const settings = await getValue("settings", { tax0: false }); // Get the settings, default tax0 to false
                   const anonPayload = products
-                    .filter(p => needFullSync || !p.pdf || p.pdf === 'NaN' || p.teilwert_v2 == null)
+                    .filter(p => (settings.tax0 || p.etv !== 0) && (needFullSync || !p.pdf || p.pdf === 'NaN' || p.teilwert_v2 == null))
                     .map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
                   if (anonPayload.length > 0) {
                     console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', anonPayload);
