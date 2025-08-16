@@ -25,10 +25,9 @@
 // @description 16.08.2025
 // ==/UserScript==
 
-GM_addStyle(
-    '@import url(\'https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css\');
-  
-');
+GM_addStyle(`
+    @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
+  `);
 
 
   (async function() {
