@@ -20,7 +20,7 @@
 // @grant       GM_setClipboard
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.111112
+// @version     1.111113
 // @author      -
 // @description 16.08.2025
 // ==/UserScript==
