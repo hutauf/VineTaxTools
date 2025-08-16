@@ -20,9 +20,9 @@
 // @grant       GM_setClipboard
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.111111
+// @version     1.111112
 // @author      -
-// @description 09.01.2025
+// @description 16.08.2025
 // ==/UserScript==
 
 GM_addStyle(`
@@ -73,9 +73,26 @@ GM_addStyle(`
               }
             }
 
+            function getTeilwert(item, settings) {
+                if (item.myteilwert != null) {
+                    return item.myteilwert;
+                }
+                if (settings.useTeilwertV2) {
+                    return item.teilwert_v2;
+                }
+                return item.teilwert;
+            }
+
+            function getPDFLink(item, settings) {
+                if (settings.useTeilwertV2) {
+                    return `https://hutauf.org/oracle2/files/Teilwert_v2_${item.ASIN}.pdf`;
+                }
+                return item.pdf;
+            }
+
 
             function calculateEuerValues(item, settings, avgTeilwertEtvRatio) {
-                let use_teilwert = item.myteilwert || item.teilwert || (item.etv * avgTeilwertEtvRatio);
+                let use_teilwert = getTeilwert(item, settings) || (item.etv * avgTeilwertEtvRatio);
                 if (item.storniert) return { einnahmen: 0, ausgaben: 0, entnahmen: 0, einnahmen_aus_anlagevermoegen: 0 };
 
                 const itemDate = new Date(item.date);
@@ -315,7 +332,7 @@ GM_addStyle(`
                   const needFullSync = Date.now() - lastFullSync > 7 * 24 * 60 * 60 * 1000;
 
                   const anonPayload = products
-                    .filter(p => needFullSync || !p.pdf || p.pdf === 'NaN')
+                    .filter(p => needFullSync || !p.pdf || p.pdf === 'NaN' || p.teilwert_v2 == null)
                     .map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
                   if (anonPayload.length > 0) {
                     console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', anonPayload);
@@ -337,6 +354,7 @@ GM_addStyle(`
                                   ...JSON.parse(await getValue(asinKey) || '{}'),
                                   keepa: existingAsin.keepa,
                                   teilwert: existingAsin.teilwert,
+                                  teilwert_v2: existingAsin.teilwert_v2,
                                   pdf: existingAsin.pdf
                                 };
                                 await setValue(asinKey, JSON.stringify(updated));
@@ -469,7 +487,7 @@ GM_addStyle(`
                       });
 
 
-                    if (needFullSync || !parsedData.pdf || parsedData.pdf === 'NaN') {
+                    if (needFullSync || !parsedData.pdf || parsedData.pdf === 'NaN' || parsedData.teilwert_v2 == null) {
                         tempDataToSend.push({
                             ASIN: asin,
                             name: parsedData.name,
@@ -513,6 +531,7 @@ GM_addStyle(`
                                                   ...JSON.parse(await getValue(asinKey) || '{}') ,
                                                   keepa: existingAsin.keepa,
                                                   teilwert: existingAsin.teilwert,
+                                                  teilwert_v2: existingAsin.teilwert_v2,
                                                   pdf: existingAsin.pdf
                                             };
                                             await setValue(asinKey, JSON.stringify(updated));
@@ -649,7 +668,10 @@ GM_addStyle(`
                             yearFilter: "show all years",
                             streuartikelregelung: true,
                             streuartikelregelungTeilwert: true,
-                            add2ndhalf2023to2024: true
+                            add2ndhalf2023to2024: true,
+                            einnahmezumteilwert: true,
+                            teilwertschaetzungenzurpdf: true,
+                            useTeilwertV2: false
                         });
 
                         const settingsDiv = document.createElement('div');
@@ -662,6 +684,7 @@ GM_addStyle(`
                                 <label><input type="checkbox" id="add2ndhalf2023to2024" ${settings.add2ndhalf2023to2024 ? 'checked' : ''}> 2. Jahreshälfte 2023 in 2024 versteuern</label>
                                 <label><input type="checkbox" id="einnahmezumteilwert" ${settings.einnahmezumteilwert ? 'checked' : ''}> EÜR: Einnahme zum Teilwert vor 10/2024</label>
                                 <label><input type="checkbox" id="teilwertschaetzungenzurpdf" ${settings.teilwertschaetzungenzurpdf ? 'checked' : ''}> Teilwertschätzungen der PDF hinzufügen</label>
+                                <label><input type="checkbox" id="useTeilwertV2" ${settings.useTeilwertV2 ? 'checked' : ''}> Teilwert V2 verwenden</label>
                                 <select id="yearFilter">
                                     <option value="show all years" ${settings.yearFilter === "show all years" ? 'selected' : ''}>Show all years</option>
                                     <option value="only 2023" ${settings.yearFilter === "only 2023" ? 'selected' : ''}>Only 2023</option>
@@ -726,6 +749,11 @@ GM_addStyle(`
 
                         document.getElementById('teilwertschaetzungenzurpdf').addEventListener('change', async (event) => {
                             settings.teilwertschaetzungenzurpdf = event.target.checked;
+                            await setValue("settings", settings);
+                        });
+
+                        document.getElementById('useTeilwertV2').addEventListener('change', async (event) => {
+                            settings.useTeilwertV2 = event.target.checked;
                             await setValue("settings", settings);
                         });
 
@@ -910,6 +938,7 @@ GM_addStyle(`
 
   async function createETVPlot(taxYear, items, endDate, parentElement) {
     const cancelledAsins = await getValue("cancellations", []);
+    const settings = await getValue("settings", {});
     // Filter out items with etv === 0
     const filteredItems = items.filter(item => !cancelledAsins.includes(item.ASIN) && item.etv > 0);
 
@@ -959,10 +988,10 @@ GM_addStyle(`
     const data = [historicalTrace, projectionTrace];
 
     // Add teilwert curves
-    const itemsWithTeilwert = filteredItems.filter(item => item.teilwert != null);
+    const itemsWithTeilwert = filteredItems.filter(item => getTeilwert(item, settings) != null);
     if (itemsWithTeilwert.length >= 10) {
         const teilwertEtvRatios = itemsWithTeilwert.map(item => {
-            let use_teilwert = item.myteilwert || item.teilwert;
+            let use_teilwert = getTeilwert(item, settings);
             if (use_teilwert === null || isNaN(use_teilwert) || use_teilwert < 0) {
                 console.log("Invalid teilwert found:", item);
             }
@@ -980,7 +1009,7 @@ GM_addStyle(`
                 let currentTeilwert = 0;
                 filteredItems.forEach(d => {
                     const dateKey = d.date.toISOString().split('T')[0];
-                    let use_teilwert = d.myteilwert || d.teilwert;
+                    let use_teilwert = getTeilwert(d, settings);
                     currentTeilwert += (use_teilwert != null ? use_teilwert : (d.etv * avgTeilwertEtvRatio));
                     teilwertDataMap.set(dateKey, currentTeilwert);
                 });
@@ -1031,9 +1060,10 @@ GM_addStyle(`
 
 async function createPieChart(list, parentElement) {
     const cancelledAsins = await getValue("cancellations", []);
+    const settings = await getValue("settings", {});
 
     const counts = list.reduce((acc, item) => {
-        let use_teilwert = item.myteilwert || item.teilwert;
+        let use_teilwert = getTeilwert(item, settings);
         if (cancelledAsins.includes(item.ASIN)) {
             acc.cancellations += 1;
         } else if (item.etv === 0) {
@@ -1125,18 +1155,18 @@ async function createPieChart(list, parentElement) {
     if (settings.streuartikelregelungTeilwert) {
         filteredList = filteredList.filter(item => {
             const orderDate = new Date(item.date);
-            let use_teilwert = item.myteilwert || item.teilwert;
+            let use_teilwert = getTeilwert(item, settings);
             return (orderDate >= new Date(2024, 9, 1) || use_teilwert > 11.90);
         });
     }
 
 
-      const itemsWithTeilwert = filteredList.filter(item => item.myteilwert != null || item.teilwert != null);
-      const itemsWithoutTeilwert = filteredList.filter(item => (item.myteilwert == null && item.teilwert == null) && item.etv > 0);
+      const itemsWithTeilwert = filteredList.filter(item => getTeilwert(item, settings) != null);
+      const itemsWithoutTeilwert = filteredList.filter(item => getTeilwert(item, settings) == null && item.etv > 0);
 
       if (itemsWithTeilwert.length >= 10) {
           const teilwertEtvRatios = itemsWithTeilwert.map(item => {
-              let use_teilwert = item.myteilwert || item.teilwert;
+              let use_teilwert = getTeilwert(item, settings);
               if (use_teilwert === null || isNaN(use_teilwert) || use_teilwert < 0) {
                   console.log("Invalid teilwert found in createTeilwertSummaryTable:", item);
               }
@@ -1150,7 +1180,7 @@ async function createPieChart(list, parentElement) {
               const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
 
               if (avgTeilwertEtvRatio >= 0.01 && avgTeilwertEtvRatio <= 0.5 && itemsWithoutTeilwert.length > 0) {
-                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + (item.myteilwert || item.teilwert), 0);
+                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + getTeilwert(item, settings), 0);
                   const estimatedTeilwert = itemsWithoutTeilwert.reduce((sum, item) => sum + (item.etv * avgTeilwertEtvRatio), 0);
                   const overallTeilwert = totalTeilwert + estimatedTeilwert;
 
@@ -1193,7 +1223,7 @@ async function createPieChart(list, parentElement) {
                   d3.select(parentElement).append('div').html(tableStyles);
 
               } else if (itemsWithoutTeilwert.length === 0) {
-                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + (item.myteilwert || item.teilwert), 0);
+                  const totalTeilwert = itemsWithTeilwert.reduce((sum, item) => sum + getTeilwert(item, settings), 0);
                   const table = d3.select(parentElement).append('table').attr('class', 'teilwert-summary-table');
                   const thead = table.append('thead');
                   thead.append('tr').selectAll('th')
@@ -1238,7 +1268,7 @@ async function createPieChart(list, parentElement) {
                 };
 
                 const teilwertEtvRatios = itemsWithTeilwert.map(item => {
-                    let use_teilwert = item.myteilwert || item.teilwert;
+                    let use_teilwert = getTeilwert(item, settings);
                     return use_teilwert / item.etv;
                 });
                 const avgTeilwertEtvRatio = teilwertEtvRatios.reduce((sum, ratio) => sum + ratio, 0) / teilwertEtvRatios.length;
@@ -1574,7 +1604,8 @@ async function createPieChart(list, parentElement) {
 
   async function copyPDFList() {
         const asinData = await load_all_asin_etv_values_from_storage();
-        const pdfList = asinData.map(item => item.pdf).filter(url => url && url.endsWith('.pdf'));
+        const settings = await getValue("settings", {});
+        const pdfList = asinData.map(item => getPDFLink(item, settings)).filter(url => url && url.endsWith('.pdf'));
         const pdfListText = pdfList.join('\n');
         GM_setClipboard(pdfListText);
         alert('PDF list copied to clipboard.');
@@ -1681,6 +1712,10 @@ async function createPieChart(list, parentElement) {
         // calculate the EÜR values
         const teilwertEtvRatios = 0.2; // for the PDF, we will just set this constant until we have the actual data
 
+        const itemsWithTeilwert = asinData.filter(item => getTeilwert(item, settings) != null);
+        const avgTeilwertEtvRatio = itemsWithTeilwert.map(item => getTeilwert(item, settings) / item.etv).reduce((sum, ratio) => sum + ratio, 0) / itemsWithTeilwert.length;
+
+
         itemsWithTeilwert.forEach(item => {
             const { einnahmen, ausgaben, entnahmen, einnahmen_aus_anlagevermoegen } = calculateEuerValues(item, settings, avgTeilwertEtvRatio);
             euerData.einnahmen += einnahmen;
@@ -1697,14 +1732,15 @@ async function createPieChart(list, parentElement) {
             window.progressBar.setFillWidth(0)
             for (const item of asinData) {
                 try {
-                    const pdfBytes = await fetchPDF(item.pdf);
+                    const pdfUrl = getPDFLink(item, settings);
+                    const pdfBytes = await fetchPDF(pdfUrl);
                     const externalPdf = await PDFDocument.load(pdfBytes);
                     const externalPages = await newPdf.copyPages(externalPdf, externalPdf.getPageIndices());
                     externalPages.forEach((page) => newPdf.addPage(page));
                     window.progressBar.setText(`downloading pdfs... ${asinData.indexOf(item) + 1} / ${asinData.length}`)
                     window.progressBar.setFillWidth(asinData.indexOf(item) / asinData.length * 100)
                 } catch (err) {
-                    console.error(`Failed to fetch or merge PDF from ${item.pdf}:`, err);
+                    console.error(`Failed to fetch or merge PDF from ${getPDFLink(item, settings)}:`, err);
                 }
             }
         }
@@ -1797,18 +1833,27 @@ async function createPieChart(list, parentElement) {
                           <tbody>`;
 
           asinData.forEach(item => {
+              const pdfLink = getPDFLink(item, settings);
+              let teilwertDisplay;
+              if (item.myteilwert != null) {
+                  teilwertDisplay = `${item.myteilwert}<sup>m</sup>`;
+              } else {
+                  const teilwert = settings.useTeilwertV2 ? item.teilwert_v2 : item.teilwert;
+                  teilwertDisplay = teilwert != null ? teilwert : 'N/A';
+              }
+
               table += `<tr>
                           <td>${item.ASIN}</td>
                           <td style="white-space: nowrap;">${item.date ? item.date.split('T')[0] : 'N/A'}</td>
                           <td>${item.name || 'N/A'}</td>
                           <td>${item.etv}</td>
                           <td>${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${item.ASIN}" target="_blank">${item.keepa}</a>` : 'N/A'}</td>
-                          <td id="teilwert_for_asin_${item.ASIN}" data-order="${item.myteilwert != null ? item.myteilwert : (item.teilwert != null ? item.teilwert : 0)}">
+                          <td id="teilwert_for_asin_${item.ASIN}" data-order="${getTeilwert(item, settings) || 0}">
                               <a href="javascript:void(0);">
-                                  ${item.myteilwert != null ? `${item.myteilwert}<sup>m</sup>` : (item.teilwert != null ? item.teilwert : 'N/A')}
+                                  ${teilwertDisplay}
                               </a>
                           </td>
-                          <td>${item.pdf ? `<a href="${item.pdf}" target="_blank">PDF Link</a>` : 'N/A'}</td>
+                          <td>${pdfLink ? `<a href="${pdfLink}" target="_blank">PDF Link</a>` : 'N/A'}</td>
                           <td><a href="https://www.amazon.de/dp/${item.ASIN}" target="_blank">Product Link</a></td>
                           <td><a href="https://www.amazon.de/review/create-review?encoding=UTF&asin=${item.ASIN}" target="_blank">Review Link</a></td>
                       </tr>`;
@@ -1827,7 +1872,7 @@ async function createPieChart(list, parentElement) {
         window.progressBar.hide();
 
 
-        function showTeilwertPopup(item) {
+        async function showTeilwertPopup(item) {
 
             let existingOverlay = document.getElementById('teilwert-overlay');
             if (existingOverlay) {
@@ -1835,6 +1880,8 @@ async function createPieChart(list, parentElement) {
             }
 
             const asin = item.ASIN;
+            const settings = await getValue("settings", {});
+            const pdfLink = getPDFLink(item, settings);
 
             const overlay = document.createElement('div');
             overlay.style.position = 'fixed';
@@ -1856,9 +1903,10 @@ async function createPieChart(list, parentElement) {
                 <p>Date: ${item.date.split('T')[0]}</p>
                 <p>ETV: ${item.etv}</p>
                 <p>Keepa: ${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${item.ASIN}" target="_blank">${item.keepa}</a>` : 'N/A'}</p>
-                <p>Teilwert: ${item.teilwert != null ? item.teilwert : 'N/A'}</p>
+                <p>Teilwert v1: ${item.teilwert != null ? item.teilwert : 'N/A'}</p>
+                <p>Teilwert v2: ${item.teilwert_v2 != null ? item.teilwert_v2 : 'N/A'}</p>
                 <p>Product Link: <a href="https://www.amazon.de/dp/${item.ASIN}" target="_blank">Link</a></p>
-                <p>PDF Link: ${item.pdf ? `<a href="${item.pdf}" target="_blank">Link</a>` : 'N/A'}</p>
+                <p>PDF Link: ${pdfLink ? `<a href="${pdfLink}" target="_blank">Link</a>` : 'N/A'}</p>
                 <p>Angepasster Teilwert: <input type="text" id="angepasster-teilwert" value="${item.myteilwert != null ? item.myteilwert : ''}"></p>
             `;
             overlay.innerHTML += info;
@@ -1994,14 +2042,15 @@ async function createPieChart(list, parentElement) {
 
               var currentPageURL = window.location.href;
 
-              if (currentPageURL === "https://www.amazon.de/vine/account") {
+              if (currentPageURL.includes("https://www.amazon.de/vine/account")) {
                   window.addEventListener('load', async function() {
                     createUI_taxextractor();
                     });
               } else if (currentPageURL.includes("https://www.amazon.de/vine/orders")) {
-                window.addEventListener('load', function() {
-                  createUIorderpage();
-                });
+                    window.addEventListener('load', async function() {
+                        createUIorderpage();
+                    });
               }
-      }
-  )();
+
+
+  })();
