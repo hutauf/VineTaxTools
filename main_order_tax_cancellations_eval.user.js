@@ -332,7 +332,7 @@ GM_addStyle(`
                   const needFullSync = Date.now() - lastFullSync > 7 * 24 * 60 * 60 * 1000;
 
                   const anonPayload = products
-                    .filter(p => needFullSync || !p.pdf || p.pdf === 'NaN')
+                    .filter(p => needFullSync || !p.pdf || p.pdf === 'NaN' || p.teilwert_v2 == null)
                     .map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
                   if (anonPayload.length > 0) {
                     console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', anonPayload);
@@ -487,7 +487,7 @@ GM_addStyle(`
                       });
 
 
-                    if (needFullSync || !parsedData.pdf || parsedData.pdf === 'NaN') {
+                    if (needFullSync || !parsedData.pdf || parsedData.pdf === 'NaN' || parsedData.teilwert_v2 == null) {
                         tempDataToSend.push({
                             ASIN: asin,
                             name: parsedData.name,
