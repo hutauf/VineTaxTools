@@ -358,11 +358,22 @@ GM_addStyle(`
                                   pdf: existingAsin.pdf
                                 };
                                 await setValue(asinKey, JSON.stringify(updated));
-                                payloadForPrivate.push({ ASIN: existingAsin.asin, timestamp: 0, value: JSON.stringify(updated) });
                               }
                               const token = await getValue('token');
-                              if (token && payloadForPrivate.length > 0) {
-                                const data = { token, request: 'update_asin', payload: payloadForPrivate };
+                              if (token) {
+                                const allAsinKeys = (await listValues()).filter(key => key.startsWith("ASIN_"));
+                                const allAsinData = [];
+                                for (const asinKey of allAsinKeys) {
+                                    const asin = asinKey.replace("ASIN_", "");
+                                    const jsonData = await getValue(asinKey);
+                                    const parsedData = jsonData ? JSON.parse(jsonData) : {};
+                                    allAsinData.push({
+                                        ASIN: asin,
+                                        timestamp: 0,
+                                        value: JSON.stringify(parsedData)
+                                    });
+                                }
+                                const data = { token, request: 'update_asin', payload: allAsinData };
                                 const endpoint = 'data_operations';
                                 console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
                                 GM_xmlhttpRequest({
@@ -535,12 +546,23 @@ GM_addStyle(`
                                                   pdf: existingAsin.pdf
                                             };
                                             await setValue(asinKey, JSON.stringify(updated));
-                                            payloadForPrivate.push({ ASIN: existingAsin.asin, timestamp: 0, value: JSON.stringify(updated) });
                                           }
-
+                                          
                                           const token = await getValue('token');
-                                          if (token && payloadForPrivate.length > 0) {
-                                            const data = { token, request: 'update_asin', payload: payloadForPrivate };
+                                          if (token) {
+                                            const allAsinKeys = (await listValues()).filter(key => key.startsWith("ASIN_"));
+                                            const allAsinData = [];
+                                            for (const asinKey of allAsinKeys) {
+                                                const asin = asinKey.replace("ASIN_", "");
+                                                const jsonData = await getValue(asinKey);
+                                                const parsedData = jsonData ? JSON.parse(jsonData) : {};
+                                                allAsinData.push({
+                                                    ASIN: asin,
+                                                    timestamp: 0,
+                                                    value: JSON.stringify(parsedData)
+                                                });
+                                            }
+                                            const data = { token, request: 'update_asin', payload: allAsinData };
                                             const endpoint = 'data_operations';
                                             console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
                                             GM_xmlhttpRequest({
