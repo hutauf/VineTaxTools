@@ -2066,13 +2066,12 @@ async function createPieChart(list, parentElement) {
 
               if (currentPageURL.includes("https://www.amazon.de/vine/account")) {
                   window.addEventListener('load', async function() {
-                    createUI_taxextractor();
+                    setTimeout(createUI_taxextractor, 1000);
                     });
               } else if (currentPageURL.includes("https://www.amazon.de/vine/orders")) {
                     window.addEventListener('load', async function() {
-                        createUIorderpage();
+                        setTimeout(createUIorderpage, 500);
                     });
               }
-
 
   })();
