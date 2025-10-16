@@ -199,10 +199,12 @@ GM_addStyle(`
                   }
                   const data = { token, request: "delete_all" };
                   const endpoint = "data_operations";
-                  console.log("POST https://hutaufvine.pythonanywhere.com/" + endpoint, data);
+                  const pythonanywherebackend = await getValue("pythonanywherebackend", "hutaufvine");
+                  const url = `https://${pythonanywherebackend}.pythonanywhere.com/${endpoint}`
+                  console.log("POST " + url, data);
                   GM_xmlhttpRequest({
                     method: "POST",
-                    url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
+                    url: url,
                     headers: { "Content-Type": "application/json" },
                     data: JSON.stringify(data),
                     onload: function(response) {
@@ -229,10 +231,13 @@ GM_addStyle(`
                   window.progressBar.setText('Pulling database from server now...');
                   const data = { token, request: "get_all" };
                   const endpoint = "data_operations";
-                  console.log("POST https://hutaufvine.pythonanywhere.com/" + endpoint, data);
+                  
+                  const pythonanywherebackend = await getValue("pythonanywherebackend", "hutaufvine");
+                  const url = `https://${pythonanywherebackend}.pythonanywhere.com/${endpoint}`
+                  console.log("POST " + url, data);
                   GM_xmlhttpRequest({
                     method: "POST",
-                    url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
+                    url: url,
                     headers: { "Content-Type": "application/json" },
                     data: JSON.stringify(data),
                     onload: async (response) => {
@@ -304,10 +309,12 @@ GM_addStyle(`
                   const data = { token, request: "update_asin", payload: asinData };
                   const endpoint = "data_operations";
 
-                  console.log("POST https://hutaufvine.pythonanywhere.com/" + endpoint, data);
+                  const pythonanywherebackend = await getValue("pythonanywherebackend", "hutaufvine");
+                  const url = `https://${pythonanywherebackend}.pythonanywhere.com/${endpoint}`
+                  console.log("POST " + url, data);
                   GM_xmlhttpRequest({
                     method: "POST",
-                    url: "https://hutaufvine.pythonanywhere.com/" + endpoint,
+                    url: url,
                     headers: { "Content-Type": "application/json" },
                     data: JSON.stringify(data),
                     onload: function(response) {
@@ -376,10 +383,12 @@ GM_addStyle(`
                                 }
                                 const data = { token, request: 'update_asin', payload: allAsinData };
                                 const endpoint = 'data_operations';
-                                console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
+                                const pythonanywherebackend = await getValue("pythonanywherebackend", "hutaufvine");
+                                const url = `https://${pythonanywherebackend}.pythonanywhere.com/${endpoint}`
+                                console.log('POST ' + url, data);
                                 GM_xmlhttpRequest({
                                   method: 'POST',
-                                  url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
+                                  url: url,
                                   headers: { 'Content-Type': 'application/json' },
                                   data: JSON.stringify(data),
                                   onload: (resp) => {
@@ -413,10 +422,12 @@ GM_addStyle(`
                   const payload = products.map(p => ({ ASIN: p.ASIN, timestamp: 0, value: JSON.stringify(p) }));
                   const data = { token, request: 'update_asin', payload };
                   const endpoint = 'data_operations';
-                  console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
+                  const pythonanywherebackend = await getValue("pythonanywherebackend", "hutaufvine");
+                  const url = `https://${pythonanywherebackend}.pythonanywhere.com/${endpoint}`
+                  console.log('POST ' + url, data);
                   GM_xmlhttpRequest({
                     method: 'POST',
-                    url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
+                    url: url,
                     headers: { 'Content-Type': 'application/json' },
                     data: JSON.stringify(data),
                     onload: (response) => {
@@ -428,18 +439,31 @@ GM_addStyle(`
                   });
                 }
 
-                createButtons() {
+                async createButtons() {
                   const container = document.createElement('div');
                   container.innerHTML = `
                     <button id="setTokenButton" style="margin-top: 10px;">Set token</button>
+                    <button id="setBackendButton" style="margin-top: 10px;">Set backend</button>
                     <button id="uploadButton" style="margin-top: 10px;">Upload data</button>
                     <button id="downloadButton" style="margin-top: 10px;">Download data</button>
                     <button id="deleteButton" style="margin-top: 10px;">Delete data</button>
                   `;
+                    const backendName = await getValue('pythonanywherebackend', 'hutaufvine');
+                    const backendLabel = document.createElement('span');
+                    backendLabel.id = 'backendLabel';
+                    backendLabel.style.marginLeft = '10px';
+                    backendLabel.style.fontWeight = 'bold';
+                    backendLabel.textContent = `Backend: ${backendName}`;
+                    container.appendChild(backendLabel);
 
                   container.querySelector('#setTokenButton').addEventListener('click', async () => {
                     const token = prompt('Enter token:');
                     await setValue('token', token);
+                  });
+                  container.querySelector('#setBackendButton').addEventListener('click', async () => {
+                    const pythonanywherebackend = prompt('Enter pythonanywhere backend name (pythonanywhere user account name):');
+                    await setValue('pythonanywherebackend', pythonanywherebackend);
+                    document.getElementById('backendLabel').textContent = `Backend: ${pythonanywherebackend}`;
                   });
 
                   container.querySelector('#uploadButton').addEventListener('click', async () => {
@@ -565,10 +589,12 @@ GM_addStyle(`
                                             }
                                             const data = { token, request: 'update_asin', payload: allAsinData };
                                             const endpoint = 'data_operations';
-                                            console.log('POST https://hutaufvine.pythonanywhere.com/' + endpoint, data);
+                                            const pythonanywherebackend = await getValue("pythonanywherebackend", "hutaufvine");
+                                            const url = `https://${pythonanywherebackend}.pythonanywhere.com/${endpoint}`
+                                            console.log('POST ' + url, data);
                                             GM_xmlhttpRequest({
                                               method: 'POST',
-                                              url: 'https://hutaufvine.pythonanywhere.com/' + endpoint,
+                                              url: url,
                                               headers: { 'Content-Type': 'application/json' },
                                               data: JSON.stringify(data),
                                               onload: (resp) => {
@@ -718,7 +744,7 @@ GM_addStyle(`
                             </div>
                         `;
 
-                        settingsDiv.appendChild(backendHandler.createButtons());
+                        settingsDiv.appendChild(await backendHandler.createButtons());
                         div.appendChild(settingsDiv);
                         container.appendChild(div);
 
