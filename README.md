@@ -51,3 +51,77 @@ Inwieweit dieses Tool wirklich hilfreich ist, kann ich nicht beurteilen, da die 
 
 ## Haftungsausschluss
 Dieses Projekt wird inoffiziell bereitgestellt und steht in keinem Zusammenhang mit Amazon. Die Nutzung der Skripte erfolgt auf eigene Verantwortung.
+
+
+### Vine Produkt Manager
+
+Wer den Vine Produkt Manager direkt mit den tax tools verbinden möchte, kann das tun, mit hutaufs backend (dann sehe ich alle Daten) oder mit einem eigenen backend.
+
+#### hutauf backend
+
+Kontaktiere mich auf discord und frag nach einem Token.
+
+#### eigenes backend
+
+(Anleitung mit KI erstellt..)
+
+# Vine Backend-Einrichtung
+
+Willkommen! Dies ist die Anleitung zur Einrichtung deines persönlichen Backends für den **Vine Produkt Manager** und das **Tax Summary Tools Userscript**.
+
+Indem du dieses simple Backend auf deinem eigenen, kostenlosen [PythonAnywhere](https://www.pythonanywhere.com/)-Account einrichtest, behältst du die volle Kontrolle über deine Produktdaten. Die Einrichtung dauert nur wenige Minuten.
+
+## Schritt-für-Schritt-Anleitung
+
+Folge diesen Schritten sorgfältig, um alles korrekt zu konfigurieren.
+
+### Teil 1: Das Backend auf PythonAnywhere einrichten
+
+1.  **PythonAnywhere Account erstellen**
+    Erstelle einen kostenlosen "Beginner" Account auf [pythonanywhere.com](https://www.pythonanywhere.com/).
+
+2.  **Flask-App anpassen**
+    *   Navigiere im Dashboard zum Tab **"Files"**.
+    *   Öffne die Datei `flask_app.py`, die bereits für dich angelegt wurde.
+    *   Lösche den gesamten vorhandenen Inhalt und ersetze ihn durch den Code aus der `self_hosted_backend.py` dieses Repositories.
+
+3.  **Sicherheitstoken festlegen**
+    *   Suche im Code nach den Zeilen, die die `VALID_TOKENS`s definieren (z.B. `VALID_TOKENS = ['DEIN_GEHEIMER_TOKEN']`).
+    *   Ersetze die Platzhalter `'DEIN_GEHEIMER_TOKEN'` durch deine eigenen, zufälligen und sicheren Zeichenketten. Diese Token sind wie Passwörter für deine API, also denk dir etwas aus, das schwer zu erraten ist!
+
+4.  **Speichern und Server neustarten**
+    *   Klicke auf **"Save"**, um deine Änderungen an der `flask_app.py` zu speichern.
+    *   Gehe nun zum **"Web"**-Tab in PythonAnywhere.
+    *   Klicke auf den grünen **"Reload ..."**-Button, um deinen Server mit dem neuen Code neu zu starten.
+
+5.  **Server am Leben halten (Wichtig!)**
+    Im kostenlosen Tarif von PythonAnywhere wird deine Web-App nach drei Monaten deaktiviert. Um das zu verhindern:
+    *   Logge dich einfach alle **2-3 Monate** bei PythonAnywhere ein.
+    *   Gehe zum **"Web"**-Tab.
+    *   Klicke auf den Button **"Run until 3 months from today"**. Fertig!
+
+### Teil 2: Deine Tools mit dem Backend verbinden
+
+Jetzt, wo dein Backend läuft, müssen wir den Tools noch sagen, wo sie es finden können.
+
+6.  **Vine Produkt Manager konfigurieren**
+    *   Öffne die **Einstellungen** im Vine Produkt Manager.
+    *   Finde das Feld **"Backend API URL"**.
+    *   Ersetze die Standard-URL durch deine eigene. Tausche `hutaufvine` einfach gegen deinen PythonAnywhere-Benutzernamen aus:
+        ```
+        https://DEIN_BENUTZERNAME.pythonanywhere.com/data_operations
+        ```
+    *   Gib im Feld darunter deinen **API Token** ein, den du in Schritt 3 festgelegt hast.
+    *   Klicke auf **"Speichern"**.
+
+7.  **Tax Summary Userscript im Vine Portal konfigurieren**
+    *   Gehe im Amazon Vine Portal auf die Seite **"Konto"**.
+    *   Das Userscript sollte dir dort neue Buttons anzeigen.
+    *   Klicke auf **"Set backend"** und gib deinen PythonAnywhere-Benutzernamen ein.
+    *   Klicke danach auf **"Set token"** und gib denselben API-Token wie zuvor ein.
+
+---
+
+### 🎉 Fertig!
+
+Das war's schon! Deine Tools sind nun mit deinem persönlichen Backend verbunden und synchronisieren deine Daten sicher an einen Ort, den nur du kontrollierst. Viel Erfolg
