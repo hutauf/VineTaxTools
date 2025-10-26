@@ -81,6 +81,8 @@ Folge diesen Schritten sorgfältig, um alles korrekt zu konfigurieren.
     Erstelle einen kostenlosen "Beginner" Account auf [pythonanywhere.com](https://www.pythonanywhere.com/).
 
 2.  **Flask-App anpassen**
+    *   Navigiere im Dashboard zum Tab **"Web"**.
+    *   Erstelle eine neue WebApp.
     *   Navigiere im Dashboard zum Tab **"Files"**.
     *   Öffne die Datei `flask_app.py`, die bereits für dich angelegt wurde.
     *   Lösche den gesamten vorhandenen Inhalt und ersetze ihn durch den Code aus der `self_hosted_backend.py` dieses Repositories.
