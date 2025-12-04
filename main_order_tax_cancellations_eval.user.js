@@ -73,6 +73,33 @@ GM_addStyle(`
               }
             }
 
+            async function validateAndFixDatabase() {
+              try {
+                const keys = await listValues();
+                const asinKeys = keys.filter(key => key.startsWith("ASIN_"));
+                const invalidAsins = [];
+
+                for (const asinKey of asinKeys) {
+                  const asin = asinKey.replace("ASIN_", "");
+                  
+                  // Valid ASIN must have length 10 and start with a number or 'B'
+                  if (asin.length !== 10 || !/^[0-9B]/.test(asin)) {
+                    invalidAsins.push(asin);
+                    await db.keyValuePairs.delete(asinKey);
+                    console.log(`Removed invalid ASIN: ${asin}`);
+                  }
+                }
+
+                if (invalidAsins.length > 0) {
+                  console.log(`Database cleanup complete. Removed ${invalidAsins.length} invalid ASIN(s): ${invalidAsins.join(', ')}`);
+                } else {
+                  console.log("Database validation complete. All ASINs are valid.");
+                }
+              } catch (error) {
+                console.error("Error during database validation:", error);
+              }
+            }
+
             function getTeilwert(item, settings) {
                 if (item.myteilwert != null) {
                     return item.myteilwert;
@@ -2093,10 +2120,12 @@ async function createPieChart(list, parentElement) {
 
               if (currentPageURL.includes("https://www.amazon.de/vine/account")) {
                   window.addEventListener('load', async function() {
+                    await validateAndFixDatabase();
                     setTimeout(createUI_taxextractor, 1000);
                     });
               } else if (currentPageURL.includes("https://www.amazon.de/vine/orders")) {
                     window.addEventListener('load', async function() {
+                        await validateAndFixDatabase();
                         setTimeout(createUIorderpage, 500);
                     });
               }
