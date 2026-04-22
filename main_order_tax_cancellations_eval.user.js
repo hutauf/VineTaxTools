@@ -10,7 +10,6 @@
 // @require     https://cdn.plot.ly/plotly-latest.min.js
 // @require     https://code.jquery.com/jquery-3.5.1.js
 // @require     https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js
-// @require     https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js
 // @grant       GM_setValue
 // @grant       GM_addStyle
 // @grant       GM_getValue
@@ -61,6 +60,49 @@ GM_addStyle(`
                     console.error("Error getting ASIN values:", error);
                     return [];
                 }
+            }
+
+            function updateStatusMessage(message, type = "info") {
+                const statusEl = document.getElementById('status');
+                if (!statusEl) return;
+                statusEl.textContent = message;
+                const statusColors = { info: '#0f1111', success: '#067d62', error: '#b12704' };
+                statusEl.style.color = statusColors[type] || statusColors.info;
+            }
+
+            function updateBackendStatusText(message, type = "info") {
+                const backendStatusEl = document.getElementById('backendStatus');
+                if (!backendStatusEl) return;
+                backendStatusEl.textContent = message;
+                const statusColors = { info: '#555', success: '#067d62', error: '#b12704' };
+                backendStatusEl.style.color = statusColors[type] || statusColors.info;
+            }
+
+            async function updateDefaultStatusSummary() {
+                const keys = await listValues();
+                const asinCount = keys.filter(key => key.startsWith("ASIN_")).length;
+                const backendName = await getValue('pythonanywherebackend', 'hutaufvine');
+                updateStatusMessage(`Bereit. Lokale Datenbank: ${asinCount} Einträge. Backend: ${backendName}.`);
+            }
+
+            function applyDisplayFilters(items, settings, cancellations = []) {
+                return items.filter(item => {
+                    const itemDate = new Date(item.date);
+                    const itemYear = itemDate.getFullYear();
+                    const itemMonth = itemDate.getMonth();
+                    if (settings.yearFilter !== "show all years") {
+                        if (settings.yearFilter === "only 2023" && settings.add2ndhalf2023to2024) {
+                            if (!(itemYear === 2023 && itemMonth < 6)) return false;
+                        } else if (settings.yearFilter === "only 2024" && settings.add2ndhalf2023to2024) {
+                            if (!(itemYear === 2024 || (itemYear === 2023 && itemMonth >= 6))) return false;
+                        } else if (settings.yearFilter !== `only ${itemYear}`) {
+                            return false;
+                        }
+                    }
+                    if ((!settings.cancellations) && cancellations.includes(item.ASIN)) return false;
+                    if ((!settings.tax0) && item.etv == 0) return false;
+                    return true;
+                });
             }
 
 
@@ -239,12 +281,15 @@ GM_addStyle(`
                       const result = JSON.parse(response.responseText);
                       if (result.status === "success") {
                         console.log("Database deleted successfully");
+                        updateBackendStatusText("Privates Backend: Daten gelöscht.", "success");
                       } else {
                         console.log("Failed to delete database");
+                        updateBackendStatusText("Privates Backend: Löschen fehlgeschlagen.", "error");
                       }
                     },
                     onerror: function(error) {
                       console.error("Network error while contacting " + endpoint + ":", error);
+                      updateBackendStatusText("Privates Backend: Löschen fehlgeschlagen (Netzwerk).", "error");
                     }
                   });
                 }
@@ -286,15 +331,19 @@ GM_addStyle(`
                             }
                           }
                           console.log("Database downloaded successfully");
+                          updateBackendStatusText("Privates Backend: Download erfolgreich.", "success");
                         } else {
                           console.log("Failed to download database");
+                          updateBackendStatusText("Privates Backend: Download fehlgeschlagen.", "error");
                         }
                       } else {
                         console.error("Failed to send data to the server.");
+                        updateBackendStatusText("Privates Backend: Download fehlgeschlagen.", "error");
                       }
                     },
                     onerror: function(error) {
                       console.error("Network error while contacting " + endpoint + ":", error);
+                      updateBackendStatusText("Privates Backend: Download fehlgeschlagen (Netzwerk).", "error");
                     }
                   });
                 }
@@ -348,13 +397,16 @@ GM_addStyle(`
                       console.log("Response from " + endpoint + ":", response.status);
                       if (response.status >= 200 && response.status < 300) {
                         console.log("Data successfully sent to the server.");
+                        updateBackendStatusText("Privates Backend: Upload erfolgreich.", "success");
                       } else {
                         console.log(response.text);
                         console.error("Failed to send data to the server.");
+                        updateBackendStatusText("Privates Backend: Upload fehlgeschlagen.", "error");
                       }
                     },
                     onerror: function(error) {
                       console.error("Network error while contacting " + endpoint + ":", error);
+                      updateBackendStatusText("Privates Backend: Upload fehlgeschlagen (Netzwerk).", "error");
                     }
                   });
                 }
@@ -365,9 +417,8 @@ GM_addStyle(`
                   const lastFullSync = await getValue('last_full_sync', 0);
                   const needFullSync = Date.now() - lastFullSync > 7 * 24 * 60 * 60 * 1000;
 
-                  const settings = await getValue("settings", { tax0: false }); // Get the settings, default tax0 to false
                   const anonPayload = products
-                    .filter(p => (settings.tax0 || p.etv !== 0) && (needFullSync || !p.pdf || p.pdf === 'NaN' || p.teilwert_v2 == null))
+                    .filter(p => (needFullSync || !p.pdf || p.pdf === 'NaN' || p.teilwert_v2 == null))
                     .map(p => ({ ASIN: p.ASIN, name: p.name, ETV: p.etv }));
                   if (anonPayload.length > 0) {
                     console.log('POST https://hutaufvine.pythonanywhere.com/upload_asins', anonPayload);
@@ -420,9 +471,15 @@ GM_addStyle(`
                                   data: JSON.stringify(data),
                                   onload: (resp) => {
                                     console.log('Response from ' + endpoint + ':', resp.status);
+                                    if (resp.status >= 200 && resp.status < 300) {
+                                      updateBackendStatusText("Automatischer Sync: erfolgreich (Teilwert + privates Backend).", "success");
+                                    } else {
+                                      updateBackendStatusText("Automatischer Sync: privates Backend fehlgeschlagen.", "error");
+                                    }
                                   },
                                   onerror: (err) => {
                                     console.error('Network error while contacting ' + endpoint + ':', err);
+                                    updateBackendStatusText("Automatischer Sync: privates Backend Netzwerkfehler.", "error");
                                   }
                                 });
                               }
@@ -437,8 +494,11 @@ GM_addStyle(`
                       },
                       onerror: (err) => {
                         console.error('Network error while contacting upload_asins:', err);
+                        updateBackendStatusText("Automatischer Sync: Teilwert-Backend Netzwerkfehler.", "error");
                       }
                     });
+                  } else {
+                    updateBackendStatusText("Automatischer Sync: kein Update notwendig.", "info");
                   }
 
                   const token = await getValue("token");
@@ -482,6 +542,12 @@ GM_addStyle(`
                     backendLabel.style.fontWeight = 'bold';
                     backendLabel.textContent = `Backend: ${backendName}`;
                     container.appendChild(backendLabel);
+                    const backendStatus = document.createElement('span');
+                    backendStatus.id = 'backendStatus';
+                    backendStatus.style.marginLeft = '8px';
+                    backendStatus.style.fontSize = '12px';
+                    backendStatus.textContent = 'Status: noch kein Sync';
+                    container.appendChild(backendStatus);
 
                   container.querySelector('#setTokenButton').addEventListener('click', async () => {
                     const token = prompt('Enter token:');
@@ -491,6 +557,7 @@ GM_addStyle(`
                     const pythonanywherebackend = prompt('Enter pythonanywhere backend name (pythonanywhere user account name):');
                     await setValue('pythonanywherebackend', pythonanywherebackend);
                     document.getElementById('backendLabel').textContent = `Backend: ${pythonanywherebackend}`;
+                    updateBackendStatusText('Status: Backend geändert.', 'info');
                   });
 
                   container.querySelector('#uploadButton').addEventListener('click', async () => {
@@ -659,21 +726,18 @@ GM_addStyle(`
                 async function loadXLSXInfo() {
                     userlog("starting xlsx export");
                     try {
-                        const yearElement = document.querySelector('select#vvp-tax-year-dropdown option:checked');
-                        const year = yearElement.value.trim();
+                        const yearElement = document.getElementById('load-xlsx-year');
+                        const year = yearElement ? yearElement.value.trim() : "";
                         userlog("found year to be " + year);
                         const blobData = await fetchData(year);
                         const errors = await parseExcel(blobData);
-
-                        const status = document.getElementById('status');
-                        status.textContent = `Extraction successful. Data synced and stored locally.`;
+                        updateStatusMessage(`XLSX für Jahr ${year} geladen. Daten lokal gespeichert und automatisch synchronisiert.`, "success");
                         if (errors.length > 0) {
-                            alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
+                          alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
                         }
                     } catch (error) {
                         console.error('Error loading XLSX info:', error);
-                        const status = document.getElementById('status');
-                        status.textContent = 'Error loading XLSX info';
+                        updateStatusMessage('Fehler beim Laden der XLSX-Informationen.', "error");
                     }
                 }
 
@@ -725,17 +789,19 @@ GM_addStyle(`
                   progressBar.setText('Loading...');
                   const div = document.createElement('div');
                   div.innerHTML = `
-                    <div id="vine-data-extractor" style="margin-top: 20px; width: fit-content;">
-                        <button id="load-xlsx-info" class="">Load XLSX Info</button>
-                        <button id="show-all-data">Show All Data</button>
-                        <button id="export-db">Export DB</button>
-                        <button id="import-db">Import DB</button>
-                        <button id="export-xlsx">Export XLSX</button>
-                        <button id="create-pdf">Create large PDF</button>
-                        <button id="copy-pdf-list">CopyPDF link list</button>
-
-
-                         <div id="status" style="margin-top: 10px;">nothing loaded yet</div>
+                    <div id="vine-data-extractor" style="margin-top: 20px; width: fit-content; border: 2px solid #1a73e8; border-radius: 8px; padding: 12px; background: #f4f8ff;">
+                        <div style="font-weight:700; margin-bottom: 8px; color:#1a2b4a;">VineTaxTools</div>
+                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                            <button id="load-xlsx-info" class="">Load XLSX Info</button>
+                            <label for="load-xlsx-year" style="font-size:12px; color:#333;">Jahr:</label>
+                            <select id="load-xlsx-year"></select>
+                            <button id="show-all-data">Show All Data</button>
+                            <button id="export-db">Export DB</button>
+                            <button id="import-db">Import DB</button>
+                            <button id="export-xlsx">Export XLSX</button>
+                            <button id="copy-pdf-list">Copy PDF link list</button>
+                        </div>
+                        <div id="status" style="margin-top: 10px; font-size: 13px;"></div>
                     </div>
                 `;
                         const settings = await getValue("settings", {
@@ -753,8 +819,8 @@ GM_addStyle(`
                         const settingsDiv = document.createElement('div');
                         settingsDiv.innerHTML = `
                             <div style="margin-top: 10px; width: fit-content; border: 1px solid black; padding: 10px;">
-                                <label><input type="checkbox" id="cancellations" ${settings.cancellations ? 'checked' : ''}> Cancellations</label>
-                                <label><input type="checkbox" id="tax0" ${settings.tax0 ? 'checked' : ''}> Tax0</label>
+                                <label><input type="checkbox" id="cancellations" ${settings.cancellations ? 'checked' : ''}> Cancellations berücksichtigen</label>
+                                <label><input type="checkbox" id="tax0" ${settings.tax0 ? 'checked' : ''}> tax0 berücksichtigen</label>
                                 <label><input type="checkbox" id="streuartikelregelung" ${settings.streuartikelregelung ? 'checked' : ''}> Streuartikelregelung anwenden</label>
                                 <label><input type="checkbox" id="streuartikelregelungTeilwert" ${settings.streuartikelregelungTeilwert ? 'checked' : ''}> Streuartikelregelung auf Teilwert vor 10/2024</label>
                                 <label><input type="checkbox" id="add2ndhalf2023to2024" ${settings.add2ndhalf2023to2024 ? 'checked' : ''}> 2. Jahreshälfte 2023 in 2024 versteuern</label>
@@ -774,6 +840,17 @@ GM_addStyle(`
                         settingsDiv.appendChild(await backendHandler.createButtons());
                         div.appendChild(settingsDiv);
                         container.appendChild(div);
+                        const xlsxYearSelect = document.getElementById('load-xlsx-year');
+                        const amazonYearOptions = Array.from(document.querySelectorAll('select#vvp-tax-year-dropdown option'));
+                        if (amazonYearOptions.length > 0) {
+                            xlsxYearSelect.innerHTML = amazonYearOptions.map(option => `<option value="${option.value.trim()}">${option.textContent.trim()}</option>`).join('');
+                            const selectedOption = document.querySelector('select#vvp-tax-year-dropdown option:checked');
+                            if (selectedOption) xlsxYearSelect.value = selectedOption.value.trim();
+                        } else {
+                            const currentYear = String(new Date().getFullYear());
+                            xlsxYearSelect.innerHTML = `<option value="${currentYear}">${currentYear}</option>`;
+                        }
+                        await updateDefaultStatusSummary();
 
                         const waitForElement = (selector) => {
                             return new Promise((resolve) => {
@@ -859,30 +936,7 @@ GM_addStyle(`
                     });
 
                     let cancellations = await getValue('cancellations', []);
-                    const filteredData = asinData.filter(item => {
-                        const itemYear = new Date(item.date).getFullYear();
-                        const itemMonth = new Date(item.date).getMonth();
-                        if (settings.yearFilter !== "show all years") {
-                        if (settings.yearFilter === "only 2023" && settings.add2ndhalf2023to2024) {
-                            if (!(itemYear === 2023 && itemMonth < 6)) {
-                            return false;
-                            }
-                        } else if (settings.yearFilter === "only 2024" && settings.add2ndhalf2023to2024) {
-                            if (!(itemYear === 2024 || (itemYear === 2023 && itemMonth >= 6))) {
-                            return false;
-                            }
-                        } else if (settings.yearFilter !== `only ${itemYear}`) {
-                            return false;
-                        }
-                        }
-                        if ((!settings.cancellations) && cancellations.includes(item.ASIN)) {
-                        return false;
-                        }
-                        if ((!settings.tax0) && item.etv == 0) {
-                        return false;
-                        }
-                        return true;
-                    });
+                    const filteredData = applyDisplayFilters(asinData, settings, cancellations);
 
                     asinData = filteredData;
 
@@ -946,10 +1000,9 @@ GM_addStyle(`
                   setTimeout(async () => {
                       document.getElementById('load-xlsx-info').addEventListener('click', loadXLSXInfo);
                       document.getElementById('show-all-data').addEventListener('click', showAllData);
-                      document.getElementById('create-pdf').addEventListener('click', createPDF);
                       document.getElementById('copy-pdf-list').addEventListener('click', copyPDFList);
                       const list = await load_all_asin_etv_values_from_storage();
-                      userlog(`nothing loaded yet. ${list.length} items in database`);
+                      updateStatusMessage(`Bereit. Lokale Datenbank: ${list.length} Einträge. Für XLSX-Download bitte Jahr wählen und „Load XLSX Info“ klicken.`);
                       createYearlyBreakdown(list);
 
                   }, 200);
@@ -1558,21 +1611,18 @@ async function createPieChart(list, parentElement) {
               async function loadXLSXInfo() {
                   userlog("starting xlsx export");
                   try {
-                      const yearElement = document.querySelector('select#vvp-tax-year-dropdown option:checked');
-                      const year = yearElement.value.trim();
+                      const yearElement = document.getElementById('load-xlsx-year');
+                      const year = yearElement ? yearElement.value.trim() : "";
                       userlog("found year to be " + year);
                       const blobData = await fetchData(year);
                       const errors = await parseExcel(blobData);
-
-                      const status = document.getElementById('status');
-                      status.textContent = `Extraction successful. Data synced and stored locally.`;
+                      updateStatusMessage(`XLSX für Jahr ${year} geladen. Daten lokal gespeichert und automatisch synchronisiert.`, "success");
                       if (errors.length > 0) {
                           alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
                       }
                   } catch (error) {
                       console.error('Error loading XLSX info:', error);
-                      const status = document.getElementById('status');
-                      status.textContent = 'Error loading XLSX info';
+                      updateStatusMessage('Fehler beim Laden der XLSX-Informationen.', "error");
                   }
               }
 
@@ -1622,215 +1672,21 @@ async function createPieChart(list, parentElement) {
       }, 200);
   }
 
-
-    // Fetch a PDF using GM_xmlHttpRequest
-    function fetchPDF(url) {
-        if (url && url.endsWith('.pdf')) {
-            return new Promise((resolve, reject) => {
-            console.log('GET ' + url);
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url: url,
-                responseType: 'arraybuffer',
-                onload: (response) => {
-                    console.log('Response from fetchPDF:', response.status);
-                    resolve(new Uint8Array(response.response));
-                },
-                onerror: (err) => {
-                    console.error('Network error while fetching PDF:', err);
-                    reject(err);
-                },
-            });
-            });
-        } else {
-            return Promise.reject(new Error('Invalid URL or URL does not point to a PDF file.'));
-        }
-    }
-
-    function loadScript(url) {
-        return new Promise((resolve, reject) => {
-            console.log('GET ' + url);
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url: url,
-                onload: function(response) {
-                    console.log('Response from loadScript:', response.status);
-                    if (response.status >= 200 && response.status < 300) {
-                        try {
-                            // Execute the script in a new function scope to avoid polluting the global scope
-                            let module = { exports: {} };
-                            let exports = module.exports; // For compatibility with some UMD modules
-                            eval(response.responseText);
-                            resolve(module.exports); // Resolve with the module's exports
-                        } catch (error) {
-                            reject("Error evaluating script: " + error);
-                        }
-                    } else {
-                        reject("Error loading script: " + response.status + " " + response.statusText);
-                    }
-                },
-                onerror: function(error) {
-                    console.error('Network error while loading script:', error);
-                    reject("Network error: " + error);
-                }
-            });
-        });
-    }
-
-
   async function copyPDFList() {
         const asinData = await load_all_asin_etv_values_from_storage();
-        const settings = await getValue("settings", {});
-        const pdfList = asinData.map(item => getPDFLink(item, settings)).filter(url => url && url.endsWith('.pdf'));
+        const settings = await getValue("settings", {
+            cancellations: false,
+            tax0: false,
+            yearFilter: "show all years",
+            add2ndhalf2023to2024: true
+        });
+        const cancellations = await getValue('cancellations', []);
+        const filteredData = applyDisplayFilters(asinData, settings, cancellations);
+        const pdfList = filteredData.map(item => getPDFLink(item, settings)).filter(url => url && url.endsWith('.pdf'));
         const pdfListText = pdfList.join('\n');
         GM_setClipboard(pdfListText);
-        alert('PDF list copied to clipboard.');
+        alert(`PDF-Liste kopiert (${pdfList.length} Links).`);
     }
-
-
-  async function createPDF() {
-      const pdfLib = await loadScript('https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js');
-
-      // Now you can use pdfLib
-      const { PDFDocument, rgb, StandardFonts } = pdfLib;
-
-    let asinData = await load_all_asin_etv_values_from_storage(false);
-
-    const settings = await getValue("settings", {
-        cancellations: false,
-        tax0: false,
-        yearFilter: "show all years",
-        teilwertschaetzungenzurpdf: true,
-        streuartikelregelung: true,
-        streuartikelregelungTeilwert: true
-    });
-
-    let cancellations = await getValue('cancellations', []);
-
-    const filteredData = asinData.filter(item => {
-        const itemYear = new Date(item.date).getFullYear();
-        if (settings.yearFilter !== "show all years" && settings.yearFilter !== `only ${itemYear}`) {
-            return false;
-        }
-        if ((!settings.cancellations) && cancellations.includes(item.ASIN)) {
-            return false;
-        }
-        if ((!settings.tax0) && item.etv == 0) {
-            return false;
-        }
-        return true;
-    });
-
-
-
-    //TODO remove slicing
-    asinData = filteredData
-
-    // Create a new PDF document
-        const newPdf = await PDFDocument.create();
-
-        // Add a placeholder page
-        const deckblattPage = newPdf.addPage([600, 800]);
-        const { width, height } = deckblattPage.getSize();
-        const fontSize = 12;
-        const margin = 50;
-
-        let text = `
-            Einleitung zur Versteuerung von Amazon Vine
-            ------------------------------------------
-            Amazon Vine ist ein Produkttestprogramm, bei dem ausgewählte Tester Produkte kostenlos erhalten, um diese zu bewerten. Die erhaltenen Produkte dürfen behalten werden und sind daher als Betriebsausgaben zu sehen, da Amazon Erfahrungen aus erster Hand fordert.
-
-            Referenzen:
-            1. Finanzministerium des Landes Schleswig-Holstein v. 02.07.2024 - VI 3010 - S 2240 - 190 / Ertragsteuerrechtliche Behandlung von digital agierenden Steuerpflichtigen (Influencer) https://datenbank.nwb.de/Dokument/1051855/
-            2. Bundesfinanzhof Urteil vom 21. April 2010, X R 43/08 https://www.bundesfinanzhof.de/de/entscheidung/entscheidungen-online/detail/STRE201050388/
-            3. Bundesfinanzhof Urteil vom 18. 8. 2005 – VI R 32/03 https://lexetius.com/2005,2218
-
-            `;
-
-
-            if (settings.add2ndhalf2023to2024) {
-                text += `
-                Die Produkte aus der 2. Jahreshälfte 2023 sind erst in 2024 zu versteuern, da das wirtschaftliche Eigentum dann erst auf den Produkttester übergegangen ist (§39 AO).
-                `;
-            }
-            if (settings.einnahmezumteilwert) {
-                text += `
-                Da sich Amazon bis Oktober 2024 ein Rückforderungsrecht vorgehalten hat, erfolgte der wirtschaftliche Eigentumsübergang erst nach 6 Monaten nach Erhalt des Produkts, dann zum Zeitwert des Produkts (gemeiner Wert). Die Einnahme des Produkts wurde daher entsprechend bewertet (§9 und §10 BewG, §39 AO, §8 EStG).
-                `;
-            }
-            if (settings.streuartikelregelung) {
-                text += `
-                Sogenannte Streuwerbeartikel bzw. geringwertige Warenproben werden auf Basis des BMF-Schreibens vom 19.5.2015 (Az. IV C 6 -S 2297-b/14/10001) nicht in die Berechnung mit einbezogen.
-                `;
-            }
-
-
-        deckblattPage.drawText(text, {
-            x: margin,
-            y: height - margin - fontSize,
-            size: fontSize,
-            lineHeight: 1.5*fontSize,
-            maxWidth: width - 2 * margin
-        });
-
-        // add a new page with the EÜR calculation:
-        const euerPage = newPdf.addPage([600, 800]);
-        const euerText = `
-        Einnahmenüberschussrechnung
-        ---------------------------
-        `
-        euerData = {
-            einnahmen: 0,
-            ausgaben: 0,
-            entnahmen: 0,
-            einnahmen_aus_anlagevermoegen: 0
-        };
-        // calculate the EÜR values
-        const teilwertEtvRatios = 0.2; // for the PDF, we will just set this constant until we have the actual data
-
-        const itemsWithTeilwert = asinData.filter(item => getTeilwert(item, settings) != null);
-        const avgTeilwertEtvRatio = itemsWithTeilwert.map(item => getTeilwert(item, settings) / item.etv).reduce((sum, ratio) => sum + ratio, 0) / itemsWithTeilwert.length;
-
-
-        itemsWithTeilwert.forEach(item => {
-            const { einnahmen, ausgaben, entnahmen, einnahmen_aus_anlagevermoegen } = calculateEuerValues(item, settings, avgTeilwertEtvRatio);
-            euerData.einnahmen += einnahmen;
-            euerData.ausgaben += ausgaben;
-            euerData.entnahmen += entnahmen;
-            euerData.einnahmen_aus_anlagevermoegen += einnahmen_aus_anlagevermoegen;
-        });
-
-
-        // Fetch and merge PDFs
-        if (settings.teilwertschaetzungenzurpdf) {
-            window.progressBar.show()
-            window.progressBar.setText("downloading pdfs...")
-            window.progressBar.setFillWidth(0)
-            for (const item of asinData) {
-                try {
-                    const pdfUrl = getPDFLink(item, settings);
-                    const pdfBytes = await fetchPDF(pdfUrl);
-                    const externalPdf = await PDFDocument.load(pdfBytes);
-                    const externalPages = await newPdf.copyPages(externalPdf, externalPdf.getPageIndices());
-                    externalPages.forEach((page) => newPdf.addPage(page));
-                    window.progressBar.setText(`downloading pdfs... ${asinData.indexOf(item) + 1} / ${asinData.length}`)
-                    window.progressBar.setFillWidth(asinData.indexOf(item) / asinData.length * 100)
-                } catch (err) {
-                    console.error(`Failed to fetch or merge PDF from ${getPDFLink(item, settings)}:`, err);
-                }
-            }
-        }
-
-        // Serialize and download the merged PDF
-        const finalPdfBytes = await newPdf.save();
-        const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = 'vine-tax-report.pdf';
-        window.progressBar.hide()
-        link.click();
-
-  }
 
   async function showAllData() {
     document.addEventListener('click', function(event) {
@@ -1860,30 +1716,7 @@ async function createPieChart(list, parentElement) {
         });
 
         let cancellations = await getValue('cancellations', []);
-        const filteredData = asinData.filter(item => {
-            const itemYear = new Date(item.date).getFullYear();
-            const itemMonth = new Date(item.date).getMonth();
-            if (settings.yearFilter !== "show all years") {
-            if (settings.yearFilter === "only 2023" && settings.add2ndhalf2023to2024) {
-                if (!(itemYear === 2023 && itemMonth < 6)) {
-                return false;
-                }
-            } else if (settings.yearFilter === "only 2024" && settings.add2ndhalf2023to2024) {
-                if (!(itemYear === 2024 || (itemYear === 2023 && itemMonth >= 6))) {
-                return false;
-                }
-            } else if (settings.yearFilter !== `only ${itemYear}`) {
-                return false;
-            }
-            }
-            if ((!settings.cancellations) && cancellations.includes(item.ASIN)) {
-            return false;
-            }
-            if ((!settings.tax0) && item.etv == 0) {
-            return false;
-            }
-            return true;
-        });
+        const filteredData = applyDisplayFilters(asinData, settings, cancellations);
 
         asinData = filteredData;
 
