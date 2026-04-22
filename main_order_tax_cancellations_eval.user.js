@@ -802,7 +802,7 @@ GM_addStyle(`
                     }
                 }
 
-              function createSimpleProgressBar(container) {
+              function createSimpleProgressBar(container, appendImmediately = true) {
                 const progressBarContainer = document.createElement('div');
                 progressBarContainer.id = 'simpleProgressBarContainer';
                 progressBarContainer.style.border = '1px solid black';
@@ -825,9 +825,12 @@ GM_addStyle(`
 
                 progressBarContainer.appendChild(progressBarFill);
                 progressBarContainer.appendChild(progressText);
-                container.appendChild(progressBarContainer);
+                if (appendImmediately) {
+                  container.appendChild(progressBarContainer);
+                }
 
                 return {
+                  element: progressBarContainer,
                   setFillWidth: (percentage) => {
                     progressBarFill.style.width = `${percentage}%`;
                   },
@@ -849,14 +852,13 @@ GM_addStyle(`
                       setTimeout(createUI_taxextractor, 500);
                       return;
                   }
-                  const progressBar = createSimpleProgressBar(container);
+                  const progressBar = createSimpleProgressBar(container, false);
                   window.progressBar = progressBar;
                   progressBar.setText('Loading...');
                   const div = document.createElement('div');
                   div.innerHTML = `
                     <div id="vine-data-extractor" style="margin: 12px 0 20px 0; border: 2px solid #1a73e8; border-radius: 10px; padding: 12px; background: linear-gradient(180deg, #f7faff 0%, #eef5ff 100%);">
                         <div style="font-weight:700; margin-bottom: 4px; color:#1a2b4a;">VineTaxTools</div>
-                        <div style="font-size: 12px; color:#4d5a72; margin-bottom: 10px;">Daten laden, filtern und exportieren (unabhängig von Amazon-Buttons).</div>
                         <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom: 8px;">
                             <label for="load-xlsx-year" style="font-size:12px; color:#333;">Jahr:</label>
                             <select id="load-xlsx-year"></select>
@@ -878,7 +880,6 @@ GM_addStyle(`
                             streuartikelregelungTeilwert: true,
                             add2ndhalf2023to2024: true,
                             einnahmezumteilwert: true,
-                            teilwertschaetzungenzurpdf: true,
                             useTeilwertV2: false
                         });
 
@@ -891,7 +892,6 @@ GM_addStyle(`
                                 <label><input type="checkbox" id="streuartikelregelungTeilwert" ${settings.streuartikelregelungTeilwert ? 'checked' : ''}> Streuartikelregelung auf Teilwert vor 10/2024</label>
                                 <label><input type="checkbox" id="add2ndhalf2023to2024" ${settings.add2ndhalf2023to2024 ? 'checked' : ''}> 2. Jahreshälfte 2023 in 2024 versteuern</label>
                                 <label><input type="checkbox" id="einnahmezumteilwert" ${settings.einnahmezumteilwert ? 'checked' : ''}> EÜR: Einnahme zum Teilwert vor 10/2024</label>
-                                <label><input type="checkbox" id="teilwertschaetzungenzurpdf" ${settings.teilwertschaetzungenzurpdf ? 'checked' : ''}> Teilwertschätzungen der PDF hinzufügen</label>
                                 <label><input type="checkbox" id="useTeilwertV2" ${settings.useTeilwertV2 ? 'checked' : ''}> Teilwert V2 verwenden</label>
                                 <select id="yearFilter">
                                     <option value="show all years" ${settings.yearFilter === "show all years" ? 'selected' : ''}>Show all years</option>
@@ -905,7 +905,7 @@ GM_addStyle(`
 
                         settingsDiv.appendChild(await backendHandler.createButtons());
                         div.appendChild(settingsDiv);
-                        container.insertBefore(div, container.firstChild);
+                        container.appendChild(div);
                         const xlsxYearSelect = document.getElementById('load-xlsx-year');
                         await initializeXlsxYearSelector(xlsxYearSelect);
                         await updateDefaultStatusSummary();
@@ -955,11 +955,6 @@ GM_addStyle(`
 
                         document.getElementById('einnahmezumteilwert').addEventListener('change', async (event) => {
                             settings.einnahmezumteilwert = event.target.checked;
-                            await setValue("settings", settings);
-                        });
-
-                        document.getElementById('teilwertschaetzungenzurpdf').addEventListener('change', async (event) => {
-                            settings.teilwertschaetzungenzurpdf = event.target.checked;
                             await setValue("settings", settings);
                         });
 
@@ -1062,6 +1057,7 @@ GM_addStyle(`
                       const list = await load_all_asin_etv_values_from_storage();
                       updateStatusMessage(`Bereit. Lokale Datenbank: ${list.length} Einträge. Für XLSX-Download bitte Jahr wählen und „Load XLSX Info“ klicken.`);
                       createYearlyBreakdown(list);
+                      container.appendChild(progressBar.element);
 
                   }, 200);
               }
