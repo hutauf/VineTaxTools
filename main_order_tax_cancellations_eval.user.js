@@ -105,6 +105,66 @@ GM_addStyle(`
                 });
             }
 
+            function ensureXlsxYearFallbackOption(selectEl) {
+                if (!selectEl) return;
+                if (selectEl.options.length === 0) {
+                    const currentYear = String(new Date().getFullYear());
+                    selectEl.innerHTML = `<option value="${currentYear}">${currentYear}</option>`;
+                }
+            }
+
+            function readAmazonYearOptions() {
+                return Array.from(document.querySelectorAll('select#vvp-tax-year-dropdown option'))
+                    .map(option => ({
+                        value: option.value.trim(),
+                        label: option.textContent.trim(),
+                        selected: option.selected
+                    }))
+                    .filter(option => option.value.length > 0);
+            }
+
+            function syncXlsxYearSelectFromAmazon(selectEl) {
+                if (!selectEl) return false;
+                const amazonOptions = readAmazonYearOptions();
+                if (amazonOptions.length === 0) {
+                    ensureXlsxYearFallbackOption(selectEl);
+                    return false;
+                }
+
+                const previousValue = selectEl.value;
+                selectEl.innerHTML = amazonOptions
+                    .map(option => `<option value="${option.value}">${option.label}</option>`)
+                    .join('');
+
+                const amazonSelected = amazonOptions.find(option => option.selected);
+                const preferredValue = previousValue || (amazonSelected ? amazonSelected.value : amazonOptions[0].value);
+                if (amazonOptions.some(option => option.value === preferredValue)) {
+                    selectEl.value = preferredValue;
+                } else {
+                    selectEl.value = amazonSelected ? amazonSelected.value : amazonOptions[0].value;
+                }
+                return true;
+            }
+
+            async function initializeXlsxYearSelector(selectEl) {
+                ensureXlsxYearFallbackOption(selectEl);
+                if (syncXlsxYearSelectFromAmazon(selectEl)) return;
+
+                // Amazon UI can render later; retry a few times.
+                for (let attempt = 0; attempt < 20; attempt++) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    if (syncXlsxYearSelectFromAmazon(selectEl)) return;
+                }
+
+                // Keep syncing in background if Amazon injects years later.
+                const observer = new MutationObserver(() => {
+                    if (syncXlsxYearSelectFromAmazon(selectEl)) {
+                        observer.disconnect();
+                    }
+                });
+                observer.observe(document.body, { childList: true, subtree: true });
+            }
+
 
             async function listValues() {
               try {
@@ -727,7 +787,8 @@ GM_addStyle(`
                     userlog("starting xlsx export");
                     try {
                         const yearElement = document.getElementById('load-xlsx-year');
-                        const year = yearElement ? yearElement.value.trim() : "";
+                        const amazonSelectedYear = document.querySelector('select#vvp-tax-year-dropdown option:checked')?.value?.trim();
+                        const year = (yearElement && yearElement.value ? yearElement.value.trim() : "") || amazonSelectedYear || String(new Date().getFullYear());
                         userlog("found year to be " + year);
                         const blobData = await fetchData(year);
                         const errors = await parseExcel(blobData);
@@ -841,15 +902,7 @@ GM_addStyle(`
                         div.appendChild(settingsDiv);
                         container.appendChild(div);
                         const xlsxYearSelect = document.getElementById('load-xlsx-year');
-                        const amazonYearOptions = Array.from(document.querySelectorAll('select#vvp-tax-year-dropdown option'));
-                        if (amazonYearOptions.length > 0) {
-                            xlsxYearSelect.innerHTML = amazonYearOptions.map(option => `<option value="${option.value.trim()}">${option.textContent.trim()}</option>`).join('');
-                            const selectedOption = document.querySelector('select#vvp-tax-year-dropdown option:checked');
-                            if (selectedOption) xlsxYearSelect.value = selectedOption.value.trim();
-                        } else {
-                            const currentYear = String(new Date().getFullYear());
-                            xlsxYearSelect.innerHTML = `<option value="${currentYear}">${currentYear}</option>`;
-                        }
+                        await initializeXlsxYearSelector(xlsxYearSelect);
                         await updateDefaultStatusSummary();
 
                         const waitForElement = (selector) => {
@@ -1612,7 +1665,8 @@ async function createPieChart(list, parentElement) {
                   userlog("starting xlsx export");
                   try {
                       const yearElement = document.getElementById('load-xlsx-year');
-                      const year = yearElement ? yearElement.value.trim() : "";
+                      const amazonSelectedYear = document.querySelector('select#vvp-tax-year-dropdown option:checked')?.value?.trim();
+                      const year = (yearElement && yearElement.value ? yearElement.value.trim() : "") || amazonSelectedYear || String(new Date().getFullYear());
                       userlog("found year to be " + year);
                       const blobData = await fetchData(year);
                       const errors = await parseExcel(blobData);
