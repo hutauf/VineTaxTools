@@ -844,18 +844,23 @@ GM_addStyle(`
               }
 
               async function createUI_taxextractor() {
-                  const container = document.querySelector('#vvp-tax-information-responsive-container');
+                  const container = document.querySelector('#vvp-tax-information-container');
+                  if (!container) {
+                      setTimeout(createUI_taxextractor, 500);
+                      return;
+                  }
                   const progressBar = createSimpleProgressBar(container);
                   window.progressBar = progressBar;
                   progressBar.setText('Loading...');
                   const div = document.createElement('div');
                   div.innerHTML = `
-                    <div id="vine-data-extractor" style="margin-top: 20px; width: fit-content; border: 2px solid #1a73e8; border-radius: 8px; padding: 12px; background: #f4f8ff;">
-                        <div style="font-weight:700; margin-bottom: 8px; color:#1a2b4a;">VineTaxTools</div>
-                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-                            <button id="load-xlsx-info" class="">Load XLSX Info</button>
+                    <div id="vine-data-extractor" style="margin: 12px 0 20px 0; border: 2px solid #1a73e8; border-radius: 10px; padding: 12px; background: linear-gradient(180deg, #f7faff 0%, #eef5ff 100%);">
+                        <div style="font-weight:700; margin-bottom: 4px; color:#1a2b4a;">VineTaxTools</div>
+                        <div style="font-size: 12px; color:#4d5a72; margin-bottom: 10px;">Daten laden, filtern und exportieren (unabhängig von Amazon-Buttons).</div>
+                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom: 8px;">
                             <label for="load-xlsx-year" style="font-size:12px; color:#333;">Jahr:</label>
                             <select id="load-xlsx-year"></select>
+                            <button id="load-xlsx-info" class="">Load XLSX Info</button>
                             <button id="show-all-data">Show All Data</button>
                             <button id="export-db">Export DB</button>
                             <button id="import-db">Import DB</button>
@@ -879,7 +884,7 @@ GM_addStyle(`
 
                         const settingsDiv = document.createElement('div');
                         settingsDiv.innerHTML = `
-                            <div style="margin-top: 10px; width: fit-content; border: 1px solid black; padding: 10px;">
+                            <div style="margin-top: 8px; border: 1px solid #9ab6e8; border-radius: 8px; padding: 10px; background: #ffffff;">
                                 <label><input type="checkbox" id="cancellations" ${settings.cancellations ? 'checked' : ''}> Cancellations berücksichtigen</label>
                                 <label><input type="checkbox" id="tax0" ${settings.tax0 ? 'checked' : ''}> tax0 berücksichtigen</label>
                                 <label><input type="checkbox" id="streuartikelregelung" ${settings.streuartikelregelung ? 'checked' : ''}> Streuartikelregelung anwenden</label>
@@ -900,7 +905,7 @@ GM_addStyle(`
 
                         settingsDiv.appendChild(await backendHandler.createButtons());
                         div.appendChild(settingsDiv);
-                        container.appendChild(div);
+                        container.insertBefore(div, container.firstChild);
                         const xlsxYearSelect = document.getElementById('load-xlsx-year');
                         await initializeXlsxYearSelector(xlsxYearSelect);
                         await updateDefaultStatusSummary();
