@@ -91,7 +91,10 @@ GM_addStyle(`
                     const itemYear = itemDate.getFullYear();
                     const itemMonth = itemDate.getMonth();
                     if (settings.yearFilter !== "show all years") {
-                        if (settings.yearFilter === "only 2023" && settings.add2ndhalf2023to2024) {
+                        if (settings.yearFilter === "show current year") {
+                            const currentYear = new Date().getFullYear();
+                            if (itemYear !== currentYear) return false;
+                        } else if (settings.yearFilter === "only 2023" && settings.add2ndhalf2023to2024) {
                             if (!(itemYear === 2023 && itemMonth < 6)) return false;
                         } else if (settings.yearFilter === "only 2024" && settings.add2ndhalf2023to2024) {
                             if (!(itemYear === 2024 || (itemYear === 2023 && itemMonth >= 6))) return false;
@@ -163,6 +166,58 @@ GM_addStyle(`
                     }
                 });
                 observer.observe(document.body, { childList: true, subtree: true });
+            }
+
+            function deriveVineStartYear(defaultStartYear = 2023) {
+                const currentYear = new Date().getFullYear();
+                try {
+                    const contextScript = document.querySelector('script[data-a-state*="vvp-context"]');
+                    if (!contextScript || !contextScript.textContent) {
+                        console.log(`[VineTaxTools] Could not find vvp-context script. Falling back to ${defaultStartYear}.`);
+                        return defaultStartYear;
+                    }
+
+                    const context = JSON.parse(contextScript.textContent);
+                    const acceptanceDateMs = context?.voiceDetails?.acceptanceDate;
+                    if (!acceptanceDateMs) {
+                        console.log(`[VineTaxTools] voiceDetails.acceptanceDate missing. Falling back to ${defaultStartYear}.`);
+                        return defaultStartYear;
+                    }
+
+                    const acceptanceDate = new Date(Number(acceptanceDateMs));
+                    if (Number.isNaN(acceptanceDate.getTime())) {
+                        console.log(`[VineTaxTools] acceptanceDate invalid (${acceptanceDateMs}). Falling back to ${defaultStartYear}.`);
+                        return defaultStartYear;
+                    }
+
+                    const derivedStartYear = acceptanceDate.getFullYear();
+                    const normalizedStartYear = Math.min(derivedStartYear, currentYear);
+                    console.log(`[VineTaxTools] Derived start year from voiceDetails.acceptanceDate (${acceptanceDateMs}): ${normalizedStartYear}.`);
+                    return normalizedStartYear;
+                } catch (error) {
+                    console.log(`[VineTaxTools] Failed to parse vvp-context for acceptanceDate. Falling back to ${defaultStartYear}.`, error);
+                    return defaultStartYear;
+                }
+            }
+
+            function buildYearFilterOptionsHtml(settings) {
+                const currentYear = new Date().getFullYear();
+                const startYear = deriveVineStartYear(2023);
+                const yearOptions = [];
+                for (let year = startYear; year <= currentYear; year++) {
+                    yearOptions.push(year);
+                }
+
+                const validValues = new Set(["show all years", "show current year", ...yearOptions.map(year => `only ${year}`)]);
+                const selectedValue = validValues.has(settings.yearFilter) ? settings.yearFilter : "show all years";
+
+                const optionsHtml = [
+                    `<option value="show all years"${selectedValue === "show all years" ? " selected" : ""}>Show all years</option>`,
+                    `<option value="show current year"${selectedValue === "show current year" ? " selected" : ""}>Show current year (${currentYear})</option>`,
+                    ...yearOptions.map(year => `<option value="only ${year}"${selectedValue === `only ${year}` ? " selected" : ""}>Only ${year}</option>`)
+                ];
+
+                return optionsHtml.join('');
             }
 
 
@@ -894,10 +949,7 @@ GM_addStyle(`
                                 <label><input type="checkbox" id="einnahmezumteilwert" ${settings.einnahmezumteilwert ? 'checked' : ''}> EÜR: Einnahme zum Teilwert vor 10/2024</label>
                                 <label><input type="checkbox" id="useTeilwertV2" ${settings.useTeilwertV2 ? 'checked' : ''}> Teilwert V2 verwenden</label>
                                 <select id="yearFilter">
-                                    <option value="show all years" ${settings.yearFilter === "show all years" ? 'selected' : ''}>Show all years</option>
-                                    <option value="only 2023" ${settings.yearFilter === "only 2023" ? 'selected' : ''}>Only 2023</option>
-                                    <option value="only 2024" ${settings.yearFilter === "only 2024" ? 'selected' : ''}>Only 2024</option>
-                                    <option value="only 2025" ${settings.yearFilter === "only 2025" ? 'selected' : ''}>Only 2025</option>
+                                    ${buildYearFilterOptionsHtml(settings)}
                                 </select>
 
                             </div>
@@ -1081,7 +1133,11 @@ GM_addStyle(`
             add2ndhalf2023to2024: true
         });
 
-        if (settings.yearFilter !== "show all years" && settings.yearFilter !== `only ${year}`) {
+        if (settings.yearFilter === "show current year" && year !== new Date().getFullYear()) {
+            return;
+        }
+
+        if (settings.yearFilter !== "show all years" && settings.yearFilter !== "show current year" && settings.yearFilter !== `only ${year}`) {
             return;
         }
 
