@@ -1,10 +1,21 @@
 import os
+import re
 import sqlite3
 import time
 import json
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
+
+
+@app.after_request
+def add_cors_headers(response):
+    """Allow browser extensions and web apps to use the JSON API."""
+    if request.path == "/data_operations":
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    return response
 
 # --- Configuration ---
 # A set of valid tokens for accessing the service.
@@ -17,6 +28,10 @@ VALID_TOKENS = {
 # Directory to store individual SQLite database files for each token.
 DB_DIR = "user_databases"
 
+# Safe for filenames while still allowing the underscores and hyphens commonly
+# used in configured API tokens.
+TOKEN_FILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
 # Ensure the database directory exists upon application start.
 os.makedirs(DB_DIR, exist_ok=True)
 
@@ -26,7 +41,7 @@ os.makedirs(DB_DIR, exist_ok=True)
 def get_db_path(token):
     """Generates the full path to a token's main database file."""
     # Basic sanitization to prevent directory traversal attacks.
-    if not token or not isinstance(token, str) or not token.isalnum():
+    if not isinstance(token, str) or not TOKEN_FILE_NAME_PATTERN.fullmatch(token):
         raise ValueError("Invalid token format for database path.")
     return os.path.join(DB_DIR, f"DATABASE_{token}.sqlite")
 
@@ -55,7 +70,7 @@ def get_db_conn(token):
 
 def get_history_db_path(token):
     """Generates the full path to a token's history database file."""
-    if not token or not isinstance(token, str) or not token.isalnum():
+    if not isinstance(token, str) or not TOKEN_FILE_NAME_PATTERN.fullmatch(token):
         raise ValueError("Invalid token format for database path.")
     return os.path.join(DB_DIR, f"HISTORY_{token}.sqlite")
 
@@ -108,14 +123,97 @@ def log_changes(history_cursor, asin, timestamp, old_data, new_data):
             """, (asin, timestamp, key, new_value, old_value))
 
 
+# --- Storage Location and Procedure Document Helper Functions ---
+
+GENERIC_ENTITY_CONFIG = {
+    "storage_location": {
+        "table": "storage_locations",
+        "id_field": "location_id"
+    },
+    "procedure_doc": {
+        "table": "procedure_docs",
+        "id_field": "doc_id"
+    }
+}
+
+
+def ensure_generic_tables(conn):
+    """Creates the tables used for storage locations and procedure documents."""
+    cursor = conn.cursor()
+    try:
+        for config in GENERIC_ENTITY_CONFIG.values():
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {config['table']} (
+                    entity_id TEXT PRIMARY KEY,
+                    last_update_time INTEGER NOT NULL,
+                    value TEXT NOT NULL
+                )
+            """)
+        conn.commit()
+    finally:
+        cursor.close()
+
+
+def ensure_entity_audit_table(history_conn):
+    """Creates the shared audit log for non-ASIN entities."""
+    cursor = history_conn.cursor()
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS entity_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                change_timestamp INTEGER NOT NULL,
+                changed_key TEXT NOT NULL,
+                new_value TEXT,
+                old_value TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_entity_audit_lookup
+            ON entity_audit_log (entity_type, entity_id, change_timestamp)
+        """)
+        history_conn.commit()
+    finally:
+        cursor.close()
+
+
+def get_generic_entity_config(entity_type):
+    config = GENERIC_ENTITY_CONFIG.get(entity_type)
+    if not config:
+        raise ValueError(f"Unknown entity type: {entity_type}")
+    return config
+
+
+def log_entity_changes(history_cursor, entity_type, entity_id, timestamp, old_data, new_data):
+    """Logs field-level changes for storage locations and procedure documents."""
+    all_keys = set(old_data.keys()) | set(new_data.keys())
+
+    for key in all_keys:
+        old_value = old_data.get(key)
+        new_value = new_data.get(key)
+
+        if not isinstance(old_value, str) and old_value is not None:
+            old_value = json.dumps(old_value)
+        if not isinstance(new_value, str) and new_value is not None:
+            new_value = json.dumps(new_value)
+
+        if old_value != new_value:
+            history_cursor.execute("""
+                INSERT INTO entity_audit_log
+                    (entity_type, entity_id, change_timestamp, changed_key, new_value, old_value)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (entity_type, entity_id, timestamp, key, new_value, old_value))
+
+
 # --- Main API Endpoint ---
 
 @app.route('/data_operations', methods=['POST'])
 def data_operations():
     """
     A single endpoint to handle all data operations based on the JSON request body.
-    Supported requests: 'get_asin', 'update_asin', 'get_all', 'get_asin_history',
-                        'list_audited_asins', 'delete_all'.
+    Supported requests: ASIN data and history, storage locations, procedure
+    documents, their histories and lists, plus deletion of all token data.
     """
     if not request.is_json:
         return jsonify({"status": "error", "message": "Request must be JSON"}), 400
@@ -140,8 +238,10 @@ def data_operations():
     try:
         # 3. Process request based on its type
         if request_type == "get_asin":
-            if not isinstance(payload, list):
-                return jsonify({"status": "error", "message": "Invalid payload for get_asin. Expected a list of ASINs."}), 400
+            if not isinstance(payload, list) or not all(
+                isinstance(asin, str) and len(asin) == 10 for asin in payload
+            ):
+                return jsonify({"status": "error", "message": "Invalid payload for get_asin. Expected list of 10-char ASIN strings."}), 400
 
             conn, cursor = get_db_conn(token)
             results = []
@@ -172,6 +272,10 @@ def data_operations():
 
                 if not (isinstance(asin, str) and len(asin) == 10):
                     return jsonify({"status": "error", "message": f"Invalid ASIN format: {asin}"}), 400
+                if not isinstance(new_timestamp, int):
+                    return jsonify({"status": "error", "message": f"Invalid timestamp for ASIN {asin}: must be an integer."}), 400
+                if not isinstance(new_value_str, str):
+                    return jsonify({"status": "error", "message": f"Invalid value for ASIN {asin}: must be a string."}), 400
 
                 cursor.execute("SELECT last_update_time, value FROM entries WHERE ASIN = ?", (asin,))
                 existing_entry = cursor.fetchone()
@@ -181,12 +285,18 @@ def data_operations():
                 except json.JSONDecodeError:
                     return jsonify({"status": "error", "message": f"Invalid JSON in value for ASIN {asin}."}), 400
 
+                if not isinstance(new_data_dict, dict):
+                    return jsonify({"status": "error", "message": f"Invalid JSON in value for ASIN {asin}: expected an object."}), 400
+
                 if existing_entry:
                     # Entry exists: update logic
                     existing_timestamp = existing_entry["last_update_time"]
                     try:
                         old_data_dict = json.loads(existing_entry["value"])
                     except json.JSONDecodeError:
+                        old_data_dict = {}
+
+                    if not isinstance(old_data_dict, dict):
                         old_data_dict = {}
 
                     perform_update = False
@@ -250,6 +360,186 @@ def data_operations():
             history_cursor.execute("SELECT DISTINCT ASIN FROM history ORDER BY ASIN ASC")
             asins = [row["ASIN"] for row in history_cursor.fetchall()]
             return jsonify({"status": "success", "data": asins}), 200
+
+        elif request_type in {"get_storage_location", "get_procedure_doc"}:
+            if not isinstance(payload, list) or not all(
+                isinstance(entity_id, str) and entity_id for entity_id in payload
+            ):
+                return jsonify({
+                    "status": "error",
+                    "message": f"Invalid payload for {request_type}. Expected list of non-empty ID strings."
+                }), 400
+
+            entity_type = "storage_location" if request_type == "get_storage_location" else "procedure_doc"
+            config = get_generic_entity_config(entity_type)
+            conn, cursor = get_db_conn(token)
+            ensure_generic_tables(conn)
+
+            results = []
+            for entity_id in payload:
+                cursor.execute(
+                    f"SELECT entity_id, last_update_time, value FROM {config['table']} WHERE entity_id = ?",
+                    (entity_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    row_dict = dict(row)
+                    row_dict[config["id_field"]] = row_dict.pop("entity_id")
+                    results.append(row_dict)
+            return jsonify({"status": "success", "data": results}), 200
+
+        elif request_type in {"update_storage_location", "update_procedure_doc"}:
+            if not isinstance(payload, list):
+                return jsonify({
+                    "status": "error",
+                    "message": f"Invalid payload for {request_type}. Expected a list of entry objects."
+                }), 400
+
+            entity_type = "storage_location" if request_type == "update_storage_location" else "procedure_doc"
+            config = get_generic_entity_config(entity_type)
+            conn, cursor = get_db_conn(token)
+            ensure_generic_tables(conn)
+            history_conn, history_cursor = get_history_db_conn(token)
+            ensure_entity_audit_table(history_conn)
+
+            updated_count, inserted_count, skipped_count = 0, 0, 0
+            current_unix_time = int(time.time())
+
+            for item in payload:
+                required_fields = [config["id_field"], "timestamp", "value"]
+                if not isinstance(item, dict) or not all(key in item for key in required_fields):
+                    return jsonify({
+                        "status": "error",
+                        "message": f"Invalid item structure in {request_type} payload."
+                    }), 400
+
+                entity_id = item[config["id_field"]]
+                new_timestamp = item["timestamp"]
+                new_value_str = item["value"]
+
+                if not isinstance(entity_id, str) or not entity_id:
+                    return jsonify({"status": "error", "message": f"Invalid ID for {entity_type}: {entity_id}"}), 400
+                if not isinstance(new_timestamp, int):
+                    return jsonify({"status": "error", "message": f"Invalid timestamp for {entity_id}: must be an integer."}), 400
+                if not isinstance(new_value_str, str):
+                    return jsonify({"status": "error", "message": f"Invalid value for {entity_id}: must be a string."}), 400
+
+                try:
+                    new_data_dict = json.loads(new_value_str)
+                except json.JSONDecodeError:
+                    return jsonify({"status": "error", "message": f"Invalid JSON in value for {entity_id}."}), 400
+
+                if not isinstance(new_data_dict, dict):
+                    return jsonify({"status": "error", "message": f"Invalid JSON in value for {entity_id}: expected an object."}), 400
+
+                cursor.execute(
+                    f"SELECT last_update_time, value FROM {config['table']} WHERE entity_id = ?",
+                    (entity_id,)
+                )
+                existing_entry = cursor.fetchone()
+
+                if existing_entry:
+                    existing_timestamp = existing_entry["last_update_time"]
+                    try:
+                        old_data_dict = json.loads(existing_entry["value"])
+                    except json.JSONDecodeError:
+                        old_data_dict = {}
+
+                    if not isinstance(old_data_dict, dict):
+                        old_data_dict = {}
+
+                    perform_update = False
+                    final_data_dict = old_data_dict.copy()
+
+                    if new_timestamp > existing_timestamp:
+                        perform_update = True
+                        final_data_dict = new_data_dict
+                    elif new_timestamp == 0:
+                        has_changes = False
+                        for key, value in new_data_dict.items():
+                            if old_data_dict.get(key) != value:
+                                final_data_dict[key] = value
+                                has_changes = True
+                        if has_changes:
+                            perform_update = True
+
+                    if perform_update:
+                        log_entity_changes(
+                            history_cursor, entity_type, entity_id,
+                            current_unix_time, old_data_dict, final_data_dict
+                        )
+                        timestamp_to_set = (
+                            new_timestamp if new_timestamp > existing_timestamp else existing_timestamp
+                        )
+                        cursor.execute(
+                            f"UPDATE {config['table']} SET last_update_time = ?, value = ? WHERE entity_id = ?",
+                            (timestamp_to_set, json.dumps(final_data_dict), entity_id)
+                        )
+                        updated_count += 1
+                    else:
+                        skipped_count += 1
+                else:
+                    log_entity_changes(
+                        history_cursor, entity_type, entity_id,
+                        current_unix_time, {}, new_data_dict
+                    )
+                    cursor.execute(
+                        f"INSERT INTO {config['table']} (entity_id, last_update_time, value) VALUES (?, ?, ?)",
+                        (entity_id, new_timestamp, new_value_str)
+                    )
+                    inserted_count += 1
+
+            conn.commit()
+            history_conn.commit()
+            return jsonify({
+                "status": "success",
+                "message": "Update operation complete.",
+                "inserted": inserted_count,
+                "updated": updated_count,
+                "skipped": skipped_count
+            }), 200
+
+        elif request_type in {"get_storage_location_history", "get_procedure_doc_history"}:
+            entity_type = (
+                "storage_location" if request_type == "get_storage_location_history" else "procedure_doc"
+            )
+            config = get_generic_entity_config(entity_type)
+
+            if not isinstance(payload, dict) or config["id_field"] not in payload:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Invalid payload for {request_type}. Expected {{{config['id_field']!r}: '...'}}"
+                }), 400
+
+            entity_id = payload[config["id_field"]]
+            if not isinstance(entity_id, str) or not entity_id:
+                return jsonify({"status": "error", "message": f"Invalid ID for {entity_type}."}), 400
+
+            history_conn, history_cursor = get_history_db_conn(token)
+            ensure_entity_audit_table(history_conn)
+            history_cursor.execute("""
+                SELECT id, entity_type, entity_id, change_timestamp, changed_key, new_value, old_value
+                FROM entity_audit_log
+                WHERE entity_type = ? AND entity_id = ?
+                ORDER BY change_timestamp DESC, id DESC
+            """, (entity_type, entity_id))
+            history_entries = [dict(row) for row in history_cursor.fetchall()]
+            return jsonify({"status": "success", "data": history_entries}), 200
+
+        elif request_type in {"list_storage_locations", "list_procedure_docs"}:
+            entity_type = "storage_location" if request_type == "list_storage_locations" else "procedure_doc"
+            config = get_generic_entity_config(entity_type)
+            conn, cursor = get_db_conn(token)
+            ensure_generic_tables(conn)
+            cursor.execute(
+                f"SELECT entity_id, last_update_time, value FROM {config['table']} ORDER BY entity_id"
+            )
+            rows = []
+            for row in cursor.fetchall():
+                row_dict = dict(row)
+                row_dict[config["id_field"]] = row_dict.pop("entity_id")
+                rows.append(row_dict)
+            return jsonify({"status": "success", "data": rows}), 200
 
         elif request_type == "delete_all":
             # Close connections before deleting files
