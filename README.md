@@ -80,23 +80,32 @@ Folge diesen Schritten sorgfältig, um alles korrekt zu konfigurieren.
 1.  **PythonAnywhere Account erstellen**
     Erstelle einen kostenlosen "Beginner" Account auf [pythonanywhere.com](https://www.pythonanywhere.com/).
 
-2.  **Flask-App anpassen**
+2.  **Flask-CORS installieren**
+    *   Öffne im PythonAnywhere-Dashboard den Tab **"Consoles"**.
+    *   Starte eine neue **Bash-Konsole**.
+    *   Führe dort folgenden Befehl aus:
+        ```bash
+        pip install --user flask-cors
+        ```
+    *   Warte, bis die Installation abgeschlossen ist. Die Meldung `Requirement already satisfied` bedeutet, dass das Paket bereits installiert ist.
+
+3.  **Flask-App anpassen**
     *   Navigiere im Dashboard zum Tab **"Web"**.
     *   Erstelle eine neue WebApp.
     *   Navigiere im Dashboard zum Tab **"Files"**.
     *   Öffne die Datei `flask_app.py`, die bereits für dich angelegt wurde.
     *   Lösche den gesamten vorhandenen Inhalt und ersetze ihn durch den Code aus der `self_hosted_backend.py` dieses Repositories.
 
-3.  **Sicherheitstoken festlegen**
+4.  **Sicherheitstoken festlegen**
     *   Suche im Code nach den Zeilen, die die `VALID_TOKENS`s definieren (z.B. `VALID_TOKENS = ['DEIN_GEHEIMER_TOKEN']`).
     *   Ersetze die Platzhalter `'DEIN_GEHEIMER_TOKEN'` durch deine eigenen, zufälligen und sicheren Zeichenketten. Diese Token sind wie Passwörter für deine API, also denk dir etwas aus, das schwer zu erraten ist!
 
-4.  **Speichern und Server neustarten**
+5.  **Speichern und Server neustarten**
     *   Klicke auf **"Save"**, um deine Änderungen an der `flask_app.py` zu speichern.
     *   Gehe nun zum **"Web"**-Tab in PythonAnywhere.
     *   Klicke auf den grünen **"Reload ..."**-Button, um deinen Server mit dem neuen Code neu zu starten.
 
-5.  **Server am Leben halten (Wichtig!)**
+6.  **Server am Leben halten (Wichtig!)**
     Im kostenlosen Tarif von PythonAnywhere wird deine Web-App nach drei Monaten deaktiviert. Um das zu verhindern:
     *   Logge dich einfach alle **2-3 Monate** bei PythonAnywhere ein.
     *   Gehe zum **"Web"**-Tab.
@@ -106,17 +115,17 @@ Folge diesen Schritten sorgfältig, um alles korrekt zu konfigurieren.
 
 Jetzt, wo dein Backend läuft, müssen wir den Tools noch sagen, wo sie es finden können.
 
-6.  **Vine Produkt Manager konfigurieren**
+7.  **Vine Produkt Manager konfigurieren**
     *   Öffne die **Einstellungen** im Vine Produkt Manager.
     *   Finde das Feld **"Backend API URL"**.
     *   Ersetze die Standard-URL durch deine eigene. Tausche `hutaufvine` einfach gegen deinen PythonAnywhere-Benutzernamen aus:
         ```
         https://DEIN_BENUTZERNAME.pythonanywhere.com/data_operations
         ```
-    *   Gib im Feld darunter deinen **API Token** ein, den du in Schritt 3 festgelegt hast.
+    *   Gib im Feld darunter deinen **API Token** ein, den du in Schritt 4 festgelegt hast.
     *   Klicke auf **"Speichern"**.
 
-7.  **Tax Summary Userscript im Vine Portal konfigurieren**
+8.  **Tax Summary Userscript im Vine Portal konfigurieren**
     *   Gehe im Amazon Vine Portal auf die Seite **"Konto"**.
     *   Das Userscript sollte dir dort neue Buttons anzeigen.
     *   Klicke auf **"Set backend"** und gib deinen PythonAnywhere-Benutzernamen ein.

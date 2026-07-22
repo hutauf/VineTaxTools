@@ -4,18 +4,10 @@ import sqlite3
 import time
 import json
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
-
-
-@app.after_request
-def add_cors_headers(response):
-    """Allow browser extensions and web apps to use the JSON API."""
-    if request.path == "/data_operations":
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-    return response
+CORS(app)
 
 # --- Configuration ---
 # A set of valid tokens for accessing the service.
