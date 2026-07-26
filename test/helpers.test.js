@@ -37,3 +37,21 @@ test('calculateEuerValues sold after cutoff uses etv for income', () => {
     einnahmen_aus_anlagevermoegen: 80
   });
 });
+
+test('calculateEuerValues preserves an explicit manual value of zero', () => {
+  const item = { date: '2024-11-01', etv: 100, teilwert: 80, myteilwert: 0 };
+  const res = calculateEuerValues(item, { einnahmezumteilwert: true }, 0.8);
+  assert.deepStrictEqual(res, {
+    einnahmen: 100,
+    ausgaben: 100,
+    entnahmen: 0,
+    einnahmen_aus_anlagevermoegen: 0
+  });
+});
+
+test('etvstrtofloat rejects malformed and non-string input', () => {
+  assert.ok(Number.isNaN(etvstrtofloat('12,34foo')));
+  assert.ok(Number.isNaN(etvstrtofloat('')));
+  assert.ok(Number.isNaN(etvstrtofloat('€')));
+  assert.ok(Number.isNaN(etvstrtofloat(null)));
+});

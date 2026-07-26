@@ -1,5 +1,5 @@
 function calculateEuerValues(item, settings, avgTeilwertEtvRatio) {
-    let use_teilwert = item.myteilwert || item.teilwert || (item.etv * avgTeilwertEtvRatio);
+    let use_teilwert = item.myteilwert ?? item.teilwert ?? (item.etv * avgTeilwertEtvRatio);
     if (item.storniert) return { einnahmen: 0, ausgaben: 0, entnahmen: 0, einnahmen_aus_anlagevermoegen: 0 };
 
     const itemDate = new Date(item.date);
@@ -33,9 +33,15 @@ function etvstrtofloat(etvString) {
     if (typeof etvString === 'number') {
         return etvString;
     }
-    const cleanString = etvString.replace(/[€ ]/g, '');
+    if (typeof etvString !== 'string') {
+        return NaN;
+    }
+    const cleanString = etvString.replace(/[€\s]/g, '');
+    if (cleanString === '') {
+        return NaN;
+    }
     const cleanedValue = cleanString.replace(/[.,](?=\d{3})/g, '');
-    const etv = parseFloat(cleanedValue.replace(',', '.'));
+    const etv = Number(cleanedValue.replace(',', '.'));
     return etv;
 }
 
