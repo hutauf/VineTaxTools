@@ -19,7 +19,7 @@
 // @grant       GM_setClipboard
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.112002
+// @version     1.112003
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // ==/UserScript==
@@ -1776,9 +1776,6 @@ GM_addStyle(`
                   parsed.myteilwert = parsed.myTeilwert;
                 }
 
-                const usageStatus = Array.isArray(parsed.usageStatus)
-                  ? [...parsed.usageStatus]
-                  : [];
                 const legacyUsageFields = [
                   ['verkauft', 'verkauft'],
                   ['lager', 'Lager'],
@@ -1786,17 +1783,29 @@ GM_addStyle(`
                   ['storniert', 'storniert'],
                   ['betriebsausgabe', 'betriebliche Nutzung']
                 ];
-                for (const [field, status] of legacyUsageFields) {
-                  if (parsed[field] === true) {
-                    if (!usageStatus.includes(status)) usageStatus.push(status);
-                  } else if (parsed[field] === false) {
-                    for (let index = usageStatus.length - 1; index >= 0; index--) {
-                      if (usageStatus[index] === status) usageStatus.splice(index, 1);
+
+                let usageStatus = Array.isArray(parsed.usageStatus)
+                  ? [...new Set(parsed.usageStatus)]
+                  : [];
+
+                // Eine nichtleere usageStatus-Liste ist die neuere,
+                // maßgebliche Darstellung.
+                if (usageStatus.length === 0) {
+                  // Nur wenn die Liste fehlt oder leer ist, werden alte
+                  // true-Booleans in die Liste migriert.
+                  for (const [field, status] of legacyUsageFields) {
+                    if (parsed[field] === true && !usageStatus.includes(status)) {
+                      usageStatus.push(status);
                     }
-                  } else {
-                    parsed[field] = usageStatus.includes(status);
                   }
                 }
+
+                // Anschließend werden die Legacy-Booleans immer aus der
+                // maßgeblichen Liste neu erzeugt.
+                for (const [field, status] of legacyUsageFields) {
+                  parsed[field] = usageStatus.includes(status);
+                }
+
                 parsed.usageStatus = usageStatus;
                 return parsed;
               }
@@ -4213,11 +4222,11 @@ async function createPieChart(list, parentElement) {
             document.body.appendChild(overlay);
 
             const checkboxes = [
-                { id: 'verkauft', label: 'Verkauft' },
-                { id: 'lager', label: 'Lager' },
-                { id: 'entsorgt', label: 'Entsorgt' },
-                { id: 'storniert', label: 'Storniert' },
-                { id: 'betriebsausgabe', label: 'Betriebsausgabe' }
+                { id: 'verkauft', label: 'Verkauft', status: 'verkauft' },
+                { id: 'lager', label: 'Lager', status: 'Lager' },
+                { id: 'entsorgt', label: 'Entsorgt', status: 'entsorgt' },
+                { id: 'storniert', label: 'Storniert', status: 'storniert' },
+                { id: 'betriebsausgabe', label: 'Betriebsausgabe', status: 'betriebliche Nutzung' }
             ];
 
             checkboxes.forEach(checkbox => {
@@ -4233,7 +4242,13 @@ async function createPieChart(list, parentElement) {
                 document.getElementById(checkbox.id).addEventListener('change', async (event) => {
                     const checked = event.target.checked;
                     await updateStoredProduct(asin, current => {
-                      current[checkbox.id] = checked;
+                      const usageStatus = new Set(current.usageStatus);
+                      if (checked) {
+                        usageStatus.add(checkbox.status);
+                      } else {
+                        usageStatus.delete(checkbox.status);
+                      }
+                      current.usageStatus = [...usageStatus];
                     });
                     await requestDashboardRefresh();
                 });

@@ -389,13 +389,52 @@ test('stored product compatibility mirrors manual value and usage fields in both
   assert.strictEqual(explicitLegacy.myteilwert, null);
   explicitLegacy.teilwert = 4;
   assert.strictEqual(api.getTeilwert(explicitLegacy, { useTeilwertV2: false }), 4);
-  assert.strictEqual(explicitLegacy.usageStatus.includes('verkauft'), false);
+  assert.strictEqual(explicitLegacy.usageStatus.includes('verkauft'), true);
+  assert.strictEqual(explicitLegacy.verkauft, true);
   assert.strictEqual(explicitLegacy.usageStatus.includes('Lager'), true);
-  assert.strictEqual(explicitLegacy.usageStatus.includes('entsorgt'), true);
+  assert.strictEqual(explicitLegacy.usageStatus.includes('entsorgt'), false);
   assert.strictEqual(
     Object.hasOwn(JSON.parse(JSON.stringify(explicitLegacy)), 'myteilwert'),
     true
   );
+});
+
+test('non-empty usageStatus wins over stale legacy booleans', async () => {
+  const { api } = await loadUserscript();
+
+  const product = api.parseStoredProduct({
+    usageStatus: ['verkauft', 'Lager'],
+    verkauft: false,
+    lager: false,
+    entsorgt: true
+  });
+
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(product.usageStatus)),
+    ['verkauft', 'Lager']
+  );
+  assert.strictEqual(product.verkauft, true);
+  assert.strictEqual(product.lager, true);
+  assert.strictEqual(product.entsorgt, false);
+});
+
+test('empty usageStatus is reconstructed from true legacy booleans', async () => {
+  const { api } = await loadUserscript();
+
+  const product = api.parseStoredProduct({
+    usageStatus: [],
+    verkauft: true,
+    lager: true,
+    entsorgt: false
+  });
+
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(product.usageStatus)),
+    ['verkauft', 'Lager']
+  );
+  assert.strictEqual(product.verkauft, true);
+  assert.strictEqual(product.lager, true);
+  assert.strictEqual(product.entsorgt, false);
 });
 
 test('per-ASIN product updates serialize read-modify-write operations', async () => {
@@ -418,11 +457,11 @@ test('per-ASIN product updates serialize read-modify-write operations', async ()
   const firstUpdate = api.updateStoredProduct('B000000001', async current => {
     markFirstStarted();
     await firstGate;
-    current.verkauft = true;
+    current.usageStatus = [...new Set([...current.usageStatus, 'verkauft'])];
   });
   await firstStarted;
   const secondUpdate = api.updateStoredProduct('B000000001', current => {
-    current.lager = true;
+    current.usageStatus = [...new Set([...current.usageStatus, 'Lager'])];
   });
   releaseFirst();
   await Promise.all([firstUpdate, secondUpdate]);
