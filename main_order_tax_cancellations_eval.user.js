@@ -19,13 +19,878 @@
 // @grant       GM_setClipboard
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.111116
+// @version     1.112002
 // @author      -
-// @description 16.08.2025
+// @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // ==/UserScript==
 
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
+
+    #vine-data-extractor.vtt-shell {
+      --vtt-navy: #172554;
+      --vtt-blue: #2563eb;
+      --vtt-blue-dark: #1d4ed8;
+      --vtt-blue-soft: #eff6ff;
+      --vtt-border: #dbe4f0;
+      --vtt-muted: #64748b;
+      --vtt-surface: #ffffff;
+      --vtt-page: #f8fafc;
+      --vtt-success: #047857;
+      --vtt-success-soft: #ecfdf5;
+      --vtt-warning: #b45309;
+      --vtt-warning-soft: #fffbeb;
+      --vtt-danger: #b42318;
+      --vtt-danger-soft: #fff1f2;
+      box-sizing: border-box;
+      margin: 14px 0 24px;
+      border: 1px solid #bfd3ed;
+      border-radius: 16px;
+      overflow: hidden;
+      color: #172033;
+      background: var(--vtt-surface);
+      box-shadow: 0 10px 30px rgba(30, 64, 175, 0.10);
+      font-family: Arial, sans-serif;
+    }
+
+    #vine-data-extractor *,
+    #vine-data-extractor *::before,
+    #vine-data-extractor *::after,
+    .vtt-dialog,
+    .vtt-dialog *,
+    .vtt-dialog *::before,
+    .vtt-dialog *::after {
+      box-sizing: border-box;
+    }
+
+    #vine-data-extractor .vtt-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 20px 22px;
+      color: #ffffff;
+      background:
+        radial-gradient(circle at top right, rgba(255, 255, 255, 0.18), transparent 42%),
+        linear-gradient(135deg, #172554 0%, #1d4ed8 100%);
+    }
+
+    #vine-data-extractor .vtt-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    #vine-data-extractor .vtt-brand-mark {
+      display: grid;
+      flex: 0 0 42px;
+      width: 42px;
+      height: 42px;
+      place-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.34);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.14);
+      font-weight: 800;
+      letter-spacing: -1px;
+    }
+
+    #vine-data-extractor .vtt-title {
+      margin: 0;
+      color: #ffffff;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    #vine-data-extractor .vtt-subtitle {
+      margin: 4px 0 0;
+      color: #dbeafe;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    #vine-data-extractor .vtt-header-actions,
+    #vine-data-extractor .vtt-action-row,
+    #vine-data-extractor .vtt-button-group {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #vine-data-extractor .vtt-btn,
+    #vine-data-extractor button.vtt-btn,
+    .vtt-dialog .vtt-btn,
+    .vtt-dialog button.vtt-btn {
+      min-height: 36px;
+      margin: 0;
+      border: 1px solid #cbd5e1;
+      border-radius: 9px;
+      padding: 7px 12px;
+      color: #1e293b;
+      background: #ffffff;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 650;
+      line-height: 1.2;
+      cursor: pointer;
+      transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+    }
+
+    #vine-data-extractor .vtt-btn:hover,
+    #vine-data-extractor .vtt-btn:focus-visible,
+    .vtt-dialog .vtt-btn:hover,
+    .vtt-dialog .vtt-btn:focus-visible {
+      border-color: #7aa7e8;
+      background: #f8fbff;
+    }
+
+    #vine-data-extractor .vtt-btn:active,
+    .vtt-dialog .vtt-btn:active {
+      transform: translateY(1px);
+    }
+
+    #vine-data-extractor .vtt-btn:disabled,
+    .vtt-dialog .vtt-btn:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    #vine-data-extractor .vtt-btn:focus-visible,
+    #vine-data-extractor input:focus-visible,
+    #vine-data-extractor select:focus-visible,
+    #vine-data-extractor summary:focus-visible,
+    .vtt-dialog .vtt-btn:focus-visible,
+    .vtt-dialog select:focus-visible,
+    .vtt-dialog input:focus-visible {
+      outline: 3px solid rgba(37, 99, 235, 0.28);
+      outline-offset: 2px;
+    }
+
+    #vine-data-extractor .vtt-btn-primary,
+    .vtt-dialog .vtt-btn-primary {
+      border-color: var(--vtt-blue);
+      color: #ffffff;
+      background: var(--vtt-blue);
+    }
+
+    #vine-data-extractor .vtt-btn-primary:hover,
+    #vine-data-extractor .vtt-btn-primary:focus-visible,
+    .vtt-dialog .vtt-btn-primary:hover,
+    .vtt-dialog .vtt-btn-primary:focus-visible {
+      border-color: var(--vtt-blue-dark);
+      color: #ffffff;
+      background: var(--vtt-blue-dark);
+    }
+
+    #vine-data-extractor .vtt-btn-danger,
+    .vtt-dialog .vtt-btn-danger {
+      border-color: #fecaca;
+      color: var(--vtt-danger);
+      background: #ffffff;
+    }
+
+    #vine-data-extractor .vtt-btn-danger:hover,
+    #vine-data-extractor .vtt-btn-danger:focus-visible,
+    .vtt-dialog .vtt-btn-danger:hover,
+    .vtt-dialog .vtt-btn-danger:focus-visible {
+      border-color: #fda4af;
+      background: var(--vtt-danger-soft);
+    }
+
+    #vine-data-extractor .vtt-header .vtt-btn {
+      border-color: rgba(255, 255, 255, 0.42);
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.12);
+      box-shadow: none;
+    }
+
+    #vine-data-extractor .vtt-header .vtt-btn:hover,
+    #vine-data-extractor .vtt-header .vtt-btn:focus-visible {
+      border-color: rgba(255, 255, 255, 0.75);
+      background: rgba(255, 255, 255, 0.22);
+    }
+
+    #vine-data-extractor .vtt-body {
+      display: grid;
+      gap: 14px;
+      padding: 18px 20px 22px;
+      background: var(--vtt-page);
+    }
+
+    #vine-data-extractor .vtt-status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    #vine-data-extractor .vtt-status-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      border: 1px solid var(--vtt-border);
+      border-radius: 11px;
+      padding: 11px 13px;
+      color: inherit;
+      background: #ffffff;
+      text-align: left;
+    }
+
+    #vine-data-extractor button.vtt-status-card {
+      width: 100%;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    #vine-data-extractor button.vtt-status-card:hover,
+    #vine-data-extractor button.vtt-status-card:focus-visible {
+      border-color: #93b4e5;
+      background: #f8fbff;
+    }
+
+    #vine-data-extractor .vtt-status-icon {
+      display: grid;
+      flex: 0 0 34px;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border-radius: 10px;
+      color: var(--vtt-blue-dark);
+      background: var(--vtt-blue-soft);
+      font-weight: 800;
+    }
+
+    #vine-data-extractor .vtt-status-copy {
+      min-width: 0;
+    }
+
+    #vine-data-extractor .vtt-status-label {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--vtt-muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    #vine-data-extractor .vtt-status-value {
+      display: block;
+      overflow: hidden;
+      color: #1e293b;
+      font-size: 13px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #vine-data-extractor .vtt-status-detail {
+      display: block;
+      margin-top: 2px;
+      color: var(--vtt-muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    #vine-data-extractor .vtt-dot,
+    .vtt-dialog .vtt-dot {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      margin-right: 5px;
+      border-radius: 999px;
+      background: #94a3b8;
+      box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.16);
+    }
+
+    #vine-data-extractor [data-backend-state="configured"] .vtt-dot,
+    .vtt-dialog [data-backend-state="configured"] .vtt-dot {
+      background: var(--vtt-success);
+      box-shadow: 0 0 0 3px rgba(4, 120, 87, 0.14);
+    }
+
+    #vine-data-extractor [data-backend-state="local-only"] .vtt-dot,
+    .vtt-dialog [data-backend-state="local-only"] .vtt-dot {
+      background: #d97706;
+      box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.14);
+    }
+
+    #vine-data-extractor [data-backend-state="invalid"] .vtt-dot,
+    .vtt-dialog [data-backend-state="invalid"] .vtt-dot {
+      background: var(--vtt-danger);
+      box-shadow: 0 0 0 3px rgba(180, 35, 24, 0.14);
+    }
+
+    #vine-data-extractor .vtt-panel {
+      border: 1px solid var(--vtt-border);
+      border-radius: 12px;
+      padding: 14px;
+      background: #ffffff;
+    }
+
+    #vine-data-extractor .vtt-panel-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+
+    #vine-data-extractor .vtt-panel-title,
+    .vtt-dialog .vtt-section-title {
+      margin: 0;
+      color: var(--vtt-navy);
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    #vine-data-extractor .vtt-panel-description,
+    .vtt-dialog .vtt-help-text {
+      margin: 3px 0 0;
+      color: var(--vtt-muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    #vine-data-extractor .vtt-import-grid {
+      display: grid;
+      grid-template-columns: minmax(110px, 170px) minmax(180px, auto) 1fr;
+      gap: 10px;
+      align-items: end;
+    }
+
+    #vine-data-extractor .vtt-field,
+    .vtt-dialog .vtt-field {
+      display: grid;
+      gap: 5px;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    #vine-data-extractor .vtt-field > select,
+    #vine-data-extractor .vtt-field > input[type="text"],
+    #vine-data-extractor .vtt-field > input[type="password"],
+    .vtt-dialog select,
+    .vtt-dialog input[type="text"],
+    .vtt-dialog input[type="password"] {
+      width: 100%;
+      min-height: 36px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 7px 9px;
+      color: #172033;
+      background: #ffffff;
+      font: inherit;
+      font-size: 13px;
+    }
+
+    #vine-data-extractor .vtt-info-wrap {
+      position: relative;
+      display: inline-flex;
+      vertical-align: middle;
+    }
+
+    #vine-data-extractor .vtt-info {
+      display: inline-grid;
+      width: 19px;
+      height: 19px;
+      margin: 0 2px;
+      place-items: center;
+      border: 1px solid #9db7da;
+      border-radius: 999px;
+      padding: 0;
+      color: #315d99;
+      background: #ffffff;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    #vine-data-extractor .vtt-info-popover {
+      position: absolute;
+      z-index: 40;
+      right: -8px;
+      bottom: calc(100% + 8px);
+      width: min(290px, 75vw);
+      border-radius: 8px;
+      padding: 9px 10px;
+      color: #ffffff;
+      background: #172554;
+      box-shadow: 0 7px 22px rgba(15, 23, 42, .24);
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.45;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(4px);
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+
+    #vine-data-extractor .vtt-info-popover:not([hidden]) {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    #vine-data-extractor .vtt-callout,
+    .vtt-dialog .vtt-callout {
+      border: 1px solid #bfdbfe;
+      border-left: 4px solid var(--vtt-blue);
+      border-radius: 9px;
+      padding: 10px 12px;
+      color: #1e3a5f;
+      background: var(--vtt-blue-soft);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    #vine-data-extractor .vtt-callout-warning,
+    .vtt-dialog .vtt-callout-warning {
+      border-color: #fde68a;
+      border-left-color: #d97706;
+      color: #78350f;
+      background: var(--vtt-warning-soft);
+    }
+
+    #vine-data-extractor .vtt-callout[hidden],
+    .vtt-dialog [hidden] {
+      display: none !important;
+    }
+
+    #vine-data-extractor #status:empty,
+    #vine-data-extractor #backendStatus:empty {
+      display: none;
+    }
+
+    #vine-data-extractor #status,
+    .vtt-dialog #backendStatus {
+      border-radius: 8px;
+      padding: 9px 11px;
+      background: #f8fafc;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    #vine-data-extractor #simpleProgressBarContainer {
+      width: 100% !important;
+      max-width: none !important;
+      min-height: 38px !important;
+      margin: 0 !important;
+      border-color: #a8c4e8 !important;
+      border-radius: 10px !important;
+      background: #eaf2fc !important;
+    }
+
+    #vine-data-extractor #simpleProgressText {
+      padding: 9px 12px !important;
+      font-size: 12px !important;
+    }
+
+    #vine-data-extractor #simpleProgressBarContainer[data-state="success"] {
+      border-color: #6ee7b7 !important;
+      background: #ecfdf5 !important;
+    }
+
+    #vine-data-extractor #simpleProgressBarContainer[data-state="success"] #simpleProgressBarFill {
+      background: #a7f3d0 !important;
+    }
+
+    #vine-data-extractor #simpleProgressBarContainer[data-state="success"] #simpleProgressText {
+      color: #065f46 !important;
+    }
+
+    #vine-data-extractor #simpleProgressBarContainer[data-state="error"] {
+      border-color: #fda4af !important;
+      background: #fff1f2 !important;
+    }
+
+    #vine-data-extractor #simpleProgressBarContainer[data-state="error"] #simpleProgressBarFill {
+      background: #fecdd3 !important;
+    }
+
+    #vine-data-extractor #simpleProgressBarContainer[data-state="error"] #simpleProgressText {
+      color: #9f1239 !important;
+    }
+
+    #vine-data-extractor .vtt-disclosure {
+      overflow: hidden;
+      border: 1px solid var(--vtt-border);
+      border-radius: 12px;
+      background: #ffffff;
+    }
+
+    #vine-data-extractor .vtt-disclosure + .vtt-disclosure {
+      margin-top: 10px;
+    }
+
+    #vine-data-extractor .vtt-disclosure > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 46px;
+      padding: 12px 14px;
+      color: var(--vtt-navy);
+      background: #ffffff;
+      font-size: 13px;
+      font-weight: 750;
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    #vine-data-extractor .vtt-disclosure > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    #vine-data-extractor .vtt-disclosure > summary::after {
+      flex: 0 0 auto;
+      content: "›";
+      color: #5b7da9;
+      font-size: 22px;
+      font-weight: 500;
+      transform: rotate(90deg);
+      transition: transform 150ms ease;
+    }
+
+    #vine-data-extractor .vtt-disclosure[open] > summary::after {
+      transform: rotate(270deg);
+    }
+
+    #vine-data-extractor .vtt-disclosure[open] > summary {
+      border-bottom: 1px solid var(--vtt-border);
+      background: #f8fbff;
+    }
+
+    #vine-data-extractor .vtt-disclosure-body {
+      padding: 14px;
+    }
+
+    #vine-data-extractor .vtt-year-card {
+      border-color: #bfd3ed;
+    }
+
+    #vine-data-extractor .vtt-year-card > summary {
+      font-size: 15px;
+    }
+
+    #vine-data-extractor .vtt-summary-meta {
+      margin-left: auto;
+      color: var(--vtt-muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    #vine-data-extractor .vtt-analysis-section {
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      background: #ffffff;
+    }
+
+    #vine-data-extractor .vtt-analysis-section + .vtt-analysis-section {
+      margin-top: 8px;
+    }
+
+    #vine-data-extractor .vtt-analysis-section > summary {
+      min-height: 42px;
+      padding: 10px 12px;
+    }
+
+    #vine-data-extractor .vtt-chart-content {
+      min-width: 0;
+      overflow-x: auto;
+      padding: 12px;
+    }
+
+    #vine-data-extractor .vtt-chart-content svg {
+      max-width: 100%;
+      height: auto;
+    }
+
+    #vine-data-extractor .vtt-empty-state {
+      border: 1px dashed #cbd5e1;
+      border-radius: 9px;
+      padding: 18px;
+      color: var(--vtt-muted);
+      background: #f8fafc;
+      text-align: center;
+      font-size: 12px;
+    }
+
+    #vine-data-extractor .vtt-filter-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    #vine-data-extractor .vtt-filter-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 25px;
+      border: 1px solid #c9dcf5;
+      border-radius: 999px;
+      padding: 4px 9px;
+      color: #244f85;
+      background: #eff6ff;
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    #vine-data-extractor .vtt-filter-count {
+      flex-basis: 100%;
+      margin: 3px 0 0;
+      color: var(--vtt-muted);
+      font-size: 11px;
+    }
+
+    #vine-data-extractor #data-table {
+      min-width: 0;
+      overflow-x: auto;
+    }
+
+    #vine-data-extractor .vtt-table-link {
+      border: 0;
+      padding: 2px 0;
+      color: #1d4ed8;
+      background: transparent;
+      font: inherit;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    #vine-data-extractor table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    #vine-data-extractor .teilwert-summary-table,
+    #vine-data-extractor .euer-summary-table {
+      width: 100% !important;
+    }
+
+    #vine-data-extractor .teilwert-summary-table th,
+    #vine-data-extractor .teilwert-summary-table td,
+    #vine-data-extractor .euer-summary-table th,
+    #vine-data-extractor .euer-summary-table td,
+    #vine-data-extractor .cancellation-ratio-table th,
+    #vine-data-extractor .cancellation-ratio-table td {
+      border-color: #dbe4f0 !important;
+    }
+
+    #vine-data-extractor .teilwert-summary-table th,
+    #vine-data-extractor .euer-summary-table th,
+    #vine-data-extractor .cancellation-ratio-table th {
+      color: #334155;
+      background: #eff6ff !important;
+    }
+
+    .vtt-dialog {
+      --vtt-navy: #172554;
+      --vtt-blue: #2563eb;
+      --vtt-blue-dark: #1d4ed8;
+      --vtt-blue-soft: #eff6ff;
+      --vtt-border: #dbe4f0;
+      --vtt-muted: #64748b;
+      --vtt-success: #047857;
+      --vtt-success-soft: #ecfdf5;
+      --vtt-warning-soft: #fffbeb;
+      --vtt-danger: #b42318;
+      --vtt-danger-soft: #fff1f2;
+      width: min(680px, calc(100vw - 28px));
+      max-height: min(82vh, 760px);
+      margin: auto;
+      border: 0;
+      border-radius: 15px;
+      padding: 0;
+      color: #172033;
+      background: #ffffff;
+      box-shadow: 0 24px 80px rgba(15, 23, 42, .35);
+      font-family: Arial, sans-serif;
+    }
+
+    .vtt-dialog::backdrop {
+      background: rgba(15, 23, 42, .58);
+      backdrop-filter: blur(2px);
+    }
+
+    .vtt-dialog-backdrop {
+      position: fixed;
+      z-index: 2147483645;
+      inset: 0;
+      background: rgba(15, 23, 42, .58);
+      backdrop-filter: blur(2px);
+    }
+
+    .vtt-dialog.vtt-dialog-fallback[open] {
+      position: fixed;
+      z-index: 2147483646;
+      inset: 50% auto auto 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    .vtt-dialog[open] {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .vtt-dialog-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 16px 18px;
+    }
+
+    .vtt-dialog-title {
+      margin: 0;
+      color: #172554;
+      font-size: 18px;
+    }
+
+    .vtt-dialog-subtitle {
+      margin: 4px 0 0;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .vtt-dialog-close {
+      display: grid;
+      flex: 0 0 34px;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border: 1px solid #d8e0eb;
+      border-radius: 9px;
+      color: #475569;
+      background: #ffffff;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .vtt-dialog-body {
+      display: grid;
+      gap: 14px;
+      overflow-y: auto;
+      padding: 17px 18px 20px;
+    }
+
+    .vtt-settings-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .vtt-setting-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 10px;
+      align-items: flex-start;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 10px 11px;
+      background: #ffffff;
+    }
+
+    .vtt-setting-row input[type="checkbox"] {
+      width: 17px;
+      height: 17px;
+      margin: 2px 0 0;
+      accent-color: #2563eb;
+    }
+
+    .vtt-setting-label {
+      display: block;
+      color: #1e293b;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .vtt-setting-description {
+      display: block;
+      margin-top: 3px;
+      color: #64748b;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .vtt-dialog-section {
+      display: grid;
+      gap: 9px;
+    }
+
+    .vtt-form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .vtt-backend-state {
+      display: flex;
+      align-items: center;
+      border: 1px solid #dbe4f0;
+      border-radius: 10px;
+      padding: 10px 11px;
+      color: #334155;
+      background: #f8fafc;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .vtt-danger-zone {
+      display: grid;
+      gap: 9px;
+      border: 1px solid #fecdd3;
+      border-radius: 11px;
+      padding: 12px;
+      color: #881337;
+      background: #fff7f8;
+    }
+
+    .vtt-danger-zone h4 {
+      margin: 0;
+      color: #9f1239;
+      font-size: 13px;
+    }
+
+    .vtt-danger-zone p {
+      margin: 0;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .vtt-dialog a,
+    #vine-data-extractor a {
+      color: #1d4ed8;
+    }
+
+    @media (max-width: 720px) {
+      #vine-data-extractor .vtt-header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      #vine-data-extractor .vtt-status-grid,
+      #vine-data-extractor .vtt-import-grid,
+      .vtt-dialog .vtt-form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      #vine-data-extractor .vtt-body {
+        padding: 13px;
+      }
+
+      #vine-data-extractor .vtt-header-actions .vtt-btn {
+        flex: 1 1 auto;
+      }
+    }
   `);
 
 
@@ -37,6 +902,428 @@ GM_addStyle(`
               keyValuePairs: 'key'
             });
 
+            const VINE_PRODUCT_MANAGER_URL = 'https://hutauf.github.io/vine-produkt-manager/';
+            const DEFAULT_SETTINGS = Object.freeze({
+              cancellations: false,
+              tax0: false,
+              yearFilter: "show all years",
+              streuartikelregelung: true,
+              streuartikelregelungTeilwert: true,
+              add2ndhalf2023to2024: true,
+              einnahmezumteilwert: true,
+              useTeilwertV2: false
+            });
+            const LEGACY_PARTIAL_SETTINGS_DEFAULTS = Object.freeze({
+              cancellations: false,
+              tax0: false,
+              yearFilter: "show all years",
+              streuartikelregelung: false,
+              streuartikelregelungTeilwert: false,
+              add2ndhalf2023to2024: false,
+              einnahmezumteilwert: false,
+              useTeilwertV2: false
+            });
+            let settingsWriteQueue = Promise.resolve();
+            let dashboardRefreshQueue = Promise.resolve();
+            let dashboardRefreshRevision = 0;
+            let dashboardStatusRevision = 0;
+            let analysisRenderRevision = 0;
+            let tableRenderRevision = 0;
+            let backendUiBusy = false;
+            const productUpdateQueues = new Map();
+            let progressBarController = null;
+
+            function normalizeSettings(value) {
+              const hasStoredSettings = Boolean(
+                value
+                && typeof value === 'object'
+                && !Array.isArray(value)
+              );
+              return {
+                ...(hasStoredSettings ? LEGACY_PARTIAL_SETTINGS_DEFAULTS : DEFAULT_SETTINGS),
+                ...(hasStoredSettings ? value : {})
+              };
+            }
+
+            async function getSettings() {
+              return normalizeSettings(await getValue("settings", null));
+            }
+
+            function getUtf8ByteLength(value) {
+              let bytes = 0;
+              for (const character of String(value ?? '')) {
+                const codePoint = character.codePointAt(0);
+                if (codePoint <= 0x7f) bytes += 1;
+                else if (codePoint <= 0x7ff) bytes += 2;
+                else if (codePoint <= 0xffff) bytes += 3;
+                else bytes += 4;
+              }
+              return bytes;
+            }
+
+            function formatByteSize(bytes) {
+              const safeBytes = Math.max(0, Number(bytes) || 0);
+              if (safeBytes < 1024) return `${Math.round(safeBytes)} B`;
+              if (safeBytes < 1024 ** 2) return `${(safeBytes / 1024).toFixed(safeBytes < 10 * 1024 ? 1 : 0)} KB`;
+              return `${(safeBytes / (1024 ** 2)).toFixed(safeBytes < 10 * 1024 ** 2 ? 2 : 1)} MB`;
+            }
+
+            async function getLocalProductDatabaseStats() {
+              const records = await db.keyValuePairs.toArray();
+              const productRecords = records.filter(
+                record => typeof record?.key === 'string' && record.key.startsWith('ASIN_')
+              );
+              const bytes = productRecords.reduce(
+                (sum, record) => sum + getUtf8ByteLength(record.key) + getUtf8ByteLength(record.value),
+                0
+              );
+              return {
+                productCount: productRecords.length,
+                bytes,
+                formattedSize: formatByteSize(bytes)
+              };
+            }
+
+            function getBackendUiModel(token, backendName) {
+              const hasToken = typeof token === 'string' && token.trim().length > 0;
+              const normalizedBackendName = String(backendName || 'hutaufvine').trim().toLowerCase();
+              if (hasToken && !isValidBackendName(normalizedBackendName)) {
+                return {
+                  state: 'invalid',
+                  configured: false,
+                  backendName: normalizedBackendName,
+                  title: 'Konfiguration prüfen',
+                  detail: 'Ein Token ist vorhanden, aber der Backendname ist ungültig.'
+                };
+              }
+              if (hasToken) {
+                return {
+                  state: 'configured',
+                  configured: true,
+                  backendName: normalizedBackendName,
+                  title: 'Privates Backend eingerichtet',
+                  detail: `Automatischer Voll-Sync über ${normalizedBackendName}.`
+                };
+              }
+              return {
+                state: 'local-only',
+                configured: false,
+                backendName: normalizedBackendName,
+                title: 'Nur lokal gespeichert',
+                detail: 'Kein privates Backend-Token hinterlegt.'
+              };
+            }
+
+            function getYearFilterLabel(settings) {
+              if (settings.yearFilter === 'show current year') {
+                return `Jahr: ${new Date().getFullYear()}`;
+              }
+              const onlyYear = /^only (\d{4})$/.exec(settings.yearFilter || '');
+              if (onlyYear) {
+                if (onlyYear[1] === '2024' && settings.add2ndhalf2023to2024) {
+                  return 'Steuerjahr: 2024 inkl. 2. HJ 2023';
+                }
+                if (onlyYear[1] === '2023' && settings.add2ndhalf2023to2024) {
+                  return 'Steuerjahr: 1. HJ 2023';
+                }
+                return `Jahr: ${onlyYear[1]}`;
+              }
+              return 'Jahr: alle';
+            }
+
+            function getTableFilterLabels(settingsValue) {
+              const settings = normalizeSettings(settingsValue);
+              return [
+                getYearFilterLabel(settings),
+                settings.cancellations ? 'Stornierungen: enthalten' : 'Stornierungen: ausgeblendet',
+                settings.tax0 ? '0-€-ETV: enthalten' : '0-€-ETV: ausgeblendet',
+                settings.useTeilwertV2 ? 'Teilwert: V2' : 'Teilwert: V1'
+              ];
+            }
+
+            function getEvaluationRuleLabels(settingsValue) {
+              const settings = normalizeSettings(settingsValue);
+              return [
+                settings.streuartikelregelung ? 'Streuartikelregel nach ETV aktiv' : 'Streuartikelregel nach ETV aus',
+                settings.streuartikelregelungTeilwert ? 'Streuartikelregel nach Teilwert aktiv' : 'Streuartikelregel nach Teilwert aus',
+                settings.add2ndhalf2023to2024 ? '2. HJ 2023 wird 2024 zugerechnet' : 'Keine Verschiebung aus 2023',
+                settings.einnahmezumteilwert ? 'EÜR vor 10/2024 zum Teilwert' : 'EÜR vor 10/2024 zum ETV'
+              ];
+            }
+
+            function renderTableFilterSummary(settings, inputCount, outputCount) {
+              const summary = document.getElementById('vtt-table-filter-summary');
+              if (!summary) return;
+              const labels = getTableFilterLabels(settings);
+              summary.innerHTML = labels
+                .map(label => `<span class="vtt-filter-chip">${escapeHtml(label)}</span>`)
+                .join('');
+              const count = document.createElement('p');
+              count.className = 'vtt-filter-count';
+              count.textContent = `Tabelle mit ${outputCount} von ${inputCount} Produkten erstellt · ${new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`;
+              summary.appendChild(count);
+            }
+
+            function renderSettingsSummary(settings) {
+              const summary = document.getElementById('vtt-settings-summary');
+              if (!summary) return;
+              summary.textContent = [
+                ...getTableFilterLabels(settings),
+                ...getEvaluationRuleLabels(settings)
+              ].join(' · ');
+            }
+
+            async function refreshDashboardStatusCards() {
+              const requestedRevision = ++dashboardStatusRevision;
+              const [stats, token, backendName] = await Promise.all([
+                getLocalProductDatabaseStats(),
+                getValue('token'),
+                getValue('pythonanywherebackend', 'hutaufvine')
+              ]);
+              const model = getBackendUiModel(token, backendName);
+              if (requestedRevision !== dashboardStatusRevision) {
+                return { stats, model, skipped: true };
+              }
+
+              const storageValue = document.getElementById('vtt-storage-value');
+              const storageDetail = document.getElementById('vtt-storage-detail');
+              if (storageValue) {
+                storageValue.textContent = `${stats.productCount.toLocaleString('de-DE')} Produkte`;
+              }
+              if (storageDetail) {
+                storageDetail.textContent = `ca. ${stats.formattedSize} lokale Produktdaten`;
+              }
+
+              const backendSummary = document.getElementById('vtt-backend-summary');
+              if (backendSummary) backendSummary.dataset.backendState = model.state;
+              const backendValue = document.getElementById('vtt-backend-value');
+              if (backendValue) {
+                backendValue.innerHTML = `<span class="vtt-dot" aria-hidden="true"></span>${escapeHtml(model.title)}`;
+              }
+              const backendDetail = document.getElementById('vtt-backend-detail');
+              if (backendDetail) backendDetail.textContent = model.detail;
+
+              const configurationState = document.getElementById('backendConfigurationState');
+              if (configurationState) {
+                configurationState.dataset.backendState = model.state;
+                configurationState.innerHTML = `<span class="vtt-dot" aria-hidden="true"></span>${escapeHtml(model.title)}`;
+              }
+              const backendLabel = document.getElementById('backendLabel');
+              if (backendLabel) backendLabel.textContent = `Backend: ${model.backendName}`;
+              const tokenInput = document.getElementById('backendTokenInput');
+              if (tokenInput) {
+                tokenInput.placeholder = model.configured
+                  ? 'Token ist hinterlegt – leer lassen, um ihn beizubehalten'
+                  : 'Persönlichen Token einfügen';
+              }
+              const localWarning = document.getElementById('vtt-local-only-warning');
+              if (localWarning) localWarning.hidden = model.configured;
+              for (const id of ['uploadButton', 'downloadButton', 'deleteButton']) {
+                const button = document.getElementById(id);
+                if (button) button.disabled = backendUiBusy || !model.configured;
+              }
+              for (const id of ['saveBackendButton', 'backendNameInput', 'backendTokenInput']) {
+                const control = document.getElementById(id);
+                if (control) control.disabled = backendUiBusy;
+              }
+              return { stats, model };
+            }
+
+            function openVttDialog(dialogId, trigger = null) {
+              const dialog = document.getElementById(dialogId);
+              if (!dialog) return;
+              dialog.__vttReturnFocus = trigger || document.activeElement;
+              dialog.setAttribute('role', 'dialog');
+              dialog.setAttribute('aria-modal', 'true');
+              if (typeof dialog.showModal === 'function') {
+                if (!dialog.open) dialog.showModal();
+              } else {
+                if (dialog.hasAttribute('open')) return;
+                const placeholder = document.createComment(`restore ${dialogId}`);
+                dialog.parentNode.insertBefore(placeholder, dialog);
+                const backdrop = document.createElement('div');
+                backdrop.className = 'vtt-dialog-backdrop';
+                backdrop.addEventListener('click', () => closeVttDialog(dialog));
+                dialog.__vttFallbackPlaceholder = placeholder;
+                dialog.__vttFallbackBackdrop = backdrop;
+                document.body.append(backdrop, dialog);
+                dialog.classList.add('vtt-dialog-fallback');
+                dialog.setAttribute('open', '');
+              }
+              const focusTarget = dialog.querySelector(
+                '[autofocus], .vtt-dialog-body input:not([disabled]), .vtt-dialog-body select:not([disabled]), '
+                + '.vtt-dialog-body button:not([disabled]), .vtt-dialog-body a[href], .vtt-dialog-close'
+              );
+              if (focusTarget && typeof focusTarget.focus === 'function') {
+                setTimeout(() => focusTarget.focus(), 0);
+              }
+            }
+
+            function closeVttDialog(dialog) {
+              if (!dialog) return;
+              if (typeof dialog.close === 'function' && dialog.open) {
+                dialog.close();
+              } else {
+                dialog.removeAttribute('open');
+                dialog.classList.remove('vtt-dialog-fallback');
+                dialog.__vttFallbackBackdrop?.remove();
+                dialog.__vttFallbackBackdrop = null;
+                const placeholder = dialog.__vttFallbackPlaceholder;
+                if (placeholder?.parentNode) {
+                  placeholder.parentNode.insertBefore(dialog, placeholder);
+                  placeholder.remove();
+                }
+                dialog.__vttFallbackPlaceholder = null;
+                const returnFocus = dialog.__vttReturnFocus;
+                dialog.__vttReturnFocus = null;
+                if (returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus();
+              }
+            }
+
+            function getVttDialogFocusableElements(dialog) {
+              return Array.from(dialog.querySelectorAll(
+                'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), '
+                + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+              )).filter(element => !element.hidden);
+            }
+
+            function initializeDialogInteractions(root) {
+              root.querySelectorAll('[data-vtt-open-dialog]').forEach(button => {
+                button.addEventListener('click', () => openVttDialog(button.dataset.vttOpenDialog, button));
+              });
+              root.querySelectorAll('.vtt-dialog').forEach(dialog => {
+                dialog.querySelectorAll('[data-vtt-close-dialog]').forEach(button => {
+                  button.addEventListener('click', () => closeVttDialog(dialog));
+                });
+                dialog.addEventListener('close', () => {
+                  const returnFocus = dialog.__vttReturnFocus;
+                  dialog.__vttReturnFocus = null;
+                  if (returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus();
+                });
+                dialog.addEventListener('click', event => {
+                  if (event.target !== dialog) return;
+                  const bounds = dialog.getBoundingClientRect();
+                  const inside = event.clientX >= bounds.left
+                    && event.clientX <= bounds.right
+                    && event.clientY >= bounds.top
+                    && event.clientY <= bounds.bottom;
+                  if (!inside) closeVttDialog(dialog);
+                });
+                dialog.addEventListener('keydown', event => {
+                  if (event.key === 'Escape' && typeof dialog.showModal !== 'function') {
+                    event.preventDefault();
+                    closeVttDialog(dialog);
+                    return;
+                  }
+                  if (event.key === 'Tab' && dialog.classList.contains('vtt-dialog-fallback')) {
+                    const focusable = getVttDialogFocusableElements(dialog);
+                    if (focusable.length === 0) {
+                      event.preventDefault();
+                      return;
+                    }
+                    const first = focusable[0];
+                    const last = focusable[focusable.length - 1];
+                    if (event.shiftKey && document.activeElement === first) {
+                      event.preventDefault();
+                      last.focus();
+                    } else if (!event.shiftKey && document.activeElement === last) {
+                      event.preventDefault();
+                      first.focus();
+                    }
+                  }
+                });
+              });
+            }
+
+            function initializeInfoInteractions(root) {
+              const closeAll = (except = null) => {
+                root.querySelectorAll('.vtt-info[aria-expanded="true"]').forEach(button => {
+                  if (button === except) return;
+                  button.setAttribute('aria-expanded', 'false');
+                  const popover = document.getElementById(button.getAttribute('aria-controls'));
+                  if (popover) popover.hidden = true;
+                });
+              };
+
+              root.querySelectorAll('.vtt-info[data-help]').forEach((button, index) => {
+                const wrapper = document.createElement('span');
+                wrapper.className = 'vtt-info-wrap';
+                const popover = document.createElement('span');
+                popover.id = `vtt-info-popover-${index + 1}`;
+                popover.className = 'vtt-info-popover';
+                popover.setAttribute('role', 'note');
+                popover.textContent = button.dataset.help;
+                popover.hidden = true;
+                button.before(wrapper);
+                wrapper.append(button, popover);
+                button.setAttribute('aria-controls', popover.id);
+                button.setAttribute('aria-expanded', 'false');
+                button.addEventListener('click', event => {
+                  event.stopPropagation();
+                  const willOpen = button.getAttribute('aria-expanded') !== 'true';
+                  closeAll(button);
+                  button.setAttribute('aria-expanded', String(willOpen));
+                  popover.hidden = !willOpen;
+                });
+                button.addEventListener('keydown', event => {
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    button.setAttribute('aria-expanded', 'false');
+                    popover.hidden = true;
+                  }
+                });
+              });
+              root.addEventListener('click', event => {
+                if (!event.target.closest('.vtt-info-wrap')) closeAll();
+              });
+            }
+
+            async function persistSettingAndRefresh(key, value) {
+              settingsWriteQueue = settingsWriteQueue
+                .catch(() => undefined)
+                .then(async () => {
+                  const settings = await getSettings();
+                  settings[key] = value;
+                  await setValue("settings", settings);
+                  renderSettingsSummary(settings);
+                  return settings;
+                });
+              const savedSettings = await settingsWriteQueue;
+              await requestDashboardRefresh();
+              return savedSettings;
+            }
+
+            function requestDashboardRefresh() {
+              const requestedRevision = ++dashboardRefreshRevision;
+              dashboardRefreshQueue = dashboardRefreshQueue
+                .catch(error => {
+                  console.error('Previous dashboard refresh failed:', error);
+                })
+                .then(async () => {
+                  if (requestedRevision !== dashboardRefreshRevision) return { skipped: true };
+                  const list = await load_all_asin_etv_values_from_storage(false);
+                  if (requestedRevision !== dashboardRefreshRevision) return { skipped: true };
+                  const dataTable = document.getElementById('data-table');
+                  if (dataTable?.dataset.rendered === 'true') {
+                    await showAllData({ openSection: false, sourceData: list });
+                  }
+                  if (document.getElementById('vtt-analysis-content')) {
+                    await createYearlyBreakdown(list);
+                  }
+                  await refreshDashboardStatusCards();
+                  return { refreshed: true };
+                });
+              return dashboardRefreshQueue;
+            }
+
+            async function waitForDashboardRefreshIdle() {
+              let observedQueue;
+              do {
+                observedQueue = dashboardRefreshQueue;
+                await observedQueue;
+              } while (observedQueue !== dashboardRefreshQueue);
+            }
+
             async function setValue(key, value) {
               await db.keyValuePairs.put({ key, value });
             }
@@ -44,6 +1331,40 @@ GM_addStyle(`
             async function getValue(key, defaultValue = null) {
               const result = await db.keyValuePairs.get(key);
               return result ? result.value : defaultValue;
+            }
+
+            function enqueueProductOperation(asinValue, operation) {
+              const asin = normalizeAsin(asinValue);
+              if (!asin) return Promise.reject(new Error('Ungültige ASIN für Produktänderung.'));
+              const previous = productUpdateQueues.get(asin) || Promise.resolve();
+              const queued = previous
+                .catch(() => undefined)
+                .then(() => operation(asin));
+              productUpdateQueues.set(asin, queued);
+              return queued.finally(() => {
+                if (productUpdateQueues.get(asin) === queued) {
+                  productUpdateQueues.delete(asin);
+                }
+              });
+            }
+
+            function updateStoredProduct(asinValue, updater, options = {}) {
+              return enqueueProductOperation(asinValue, async asin => {
+                const key = `ASIN_${asin}`;
+                const storedValue = await getValue(key);
+                if (!storedValue && options.createIfMissing !== true) return null;
+                const current = storedValue
+                  ? parseStoredProduct(storedValue, `local product ${asin}`)
+                  : {};
+                const candidate = await updater(current, asin);
+                const updated = candidate === undefined ? current : candidate;
+                if (!updated || typeof updated !== 'object' || Array.isArray(updated)) {
+                  throw new Error(`Ungültige Produktänderung für ${asin}.`);
+                }
+                const normalized = parseStoredProduct(updated, `local product ${asin}`);
+                await setValue(key, JSON.stringify(normalized));
+                return normalized;
+              });
             }
 
             async function getAllAsinValues() {
@@ -62,7 +1383,8 @@ GM_addStyle(`
             }
 
             function updateStatusMessage(message, type = "info") {
-                const statusEl = document.getElementById('status');
+                const statusEl = document.querySelector('#vine-data-extractor #status')
+                  || document.getElementById('status');
                 if (!statusEl) return;
                 statusEl.textContent = message;
                 const statusColors = { info: '#0f1111', success: '#067d62', error: '#b12704' };
@@ -70,7 +1392,8 @@ GM_addStyle(`
             }
 
             function updateBackendStatusText(message, type = "info") {
-                const backendStatusEl = document.getElementById('backendStatus');
+                const backendStatusEl = document.querySelector('#vine-data-extractor #backendStatus')
+                  || document.getElementById('backendStatus');
                 if (!backendStatusEl) return;
                 backendStatusEl.textContent = message;
                 const statusColors = { info: '#555', success: '#067d62', error: '#b12704' };
@@ -78,10 +1401,15 @@ GM_addStyle(`
             }
 
             async function updateDefaultStatusSummary() {
-                const keys = await listValues();
-                const asinCount = keys.filter(key => key.startsWith("ASIN_")).length;
-                const backendName = await getValue('pythonanywherebackend', 'hutaufvine');
-                updateStatusMessage(`Bereit. Lokale Datenbank: ${asinCount} Einträge. Backend: ${backendName}.`);
+                let statusSnapshot = await refreshDashboardStatusCards();
+                if (statusSnapshot.skipped) {
+                  statusSnapshot = await refreshDashboardStatusCards();
+                }
+                const { stats, model } = statusSnapshot;
+                updateStatusMessage(
+                  `Bereit. ${stats.productCount} lokale Produkte; Synchronisation: ${model.configured ? 'eingerichtet' : 'nur lokal'}.`,
+                  "success"
+                );
             }
 
             function applyDisplayFilters(items, settings, cancellations = []) {
@@ -206,14 +1534,22 @@ GM_addStyle(`
                 for (let year = startYear; year <= currentYear; year++) {
                     yearOptions.push(year);
                 }
+                const storedYearMatch = /^only (\d{4})$/.exec(settings.yearFilter || '');
+                if (storedYearMatch) {
+                    const storedYear = Number(storedYearMatch[1]);
+                    if (!yearOptions.includes(storedYear)) {
+                        yearOptions.push(storedYear);
+                        yearOptions.sort((a, b) => a - b);
+                    }
+                }
 
                 const validValues = new Set(["show all years", "show current year", ...yearOptions.map(year => `only ${year}`)]);
                 const selectedValue = validValues.has(settings.yearFilter) ? settings.yearFilter : "show all years";
 
                 const optionsHtml = [
-                    `<option value="show all years"${selectedValue === "show all years" ? " selected" : ""}>Show all years</option>`,
-                    `<option value="show current year"${selectedValue === "show current year" ? " selected" : ""}>Show current year (${currentYear})</option>`,
-                    ...yearOptions.map(year => `<option value="only ${year}"${selectedValue === `only ${year}` ? " selected" : ""}>Only ${year}</option>`)
+                    `<option value="show all years"${selectedValue === "show all years" ? " selected" : ""}>Alle Jahre anzeigen</option>`,
+                    `<option value="show current year"${selectedValue === "show current year" ? " selected" : ""}>Aktuelles Jahr (${currentYear})</option>`,
+                    ...yearOptions.map(year => `<option value="only ${year}"${selectedValue === `only ${year}` ? " selected" : ""}>Nur ${year}</option>`)
                 ];
 
                 return optionsHtml.join('');
@@ -231,6 +1567,9 @@ GM_addStyle(`
 
             async function validateAndFixDatabase() {
               try {
+                // Version 1.112001 briefly stored upload receipts that could suppress
+                // estimator polling. They are intentionally unused and removed again.
+                await db.keyValuePairs.delete('teilwert_estimator_acknowledgements_v1');
                 const keys = await listValues();
                 const asinKeys = keys.filter(key => key.startsWith("ASIN_"));
                 const invalidAsins = [];
@@ -549,10 +1888,11 @@ GM_addStyle(`
                 });
               }
 
-              function setProgress(text, percentage = null) {
-                const progressBar = window.progressBar;
+              function setProgress(text, percentage = null, state = "info") {
+                const progressBar = progressBarController || window.progressBar;
                 if (!progressBar) return;
                 progressBar.show();
+                if (typeof progressBar.setState === 'function') progressBar.setState(state);
                 progressBar.setText(text);
                 if (percentage != null) {
                   progressBar.setFillWidth(Math.max(0, Math.min(100, percentage)));
@@ -566,7 +1906,7 @@ GM_addStyle(`
                 const safeFraction = Math.max(0, Math.min(1, Number(fraction) || 0));
                 const percentage = ((safeStep - 1 + safeFraction) / AUTOMATIC_SYNC_TOTAL_STEPS) * 100;
                 const message = `Automatischer Sync – Schritt ${safeStep}/${AUTOMATIC_SYNC_TOTAL_STEPS}: ${text}`;
-                setProgress(message, percentage);
+                setProgress(message, percentage, type);
               }
 
               function gmRequest(options) {
@@ -636,14 +1976,15 @@ GM_addStyle(`
 
                 async getPrivateConfig() {
                   const token = await getValue("token");
-                  if (!token) {
+                  const normalizedToken = typeof token === 'string' ? token.trim() : '';
+                  if (!normalizedToken) {
                     return null;
                   }
                   const pythonanywherebackend = await getValue("pythonanywherebackend", "hutaufvine");
                   return {
-                    token: String(token),
+                    token: normalizedToken,
                     backendName: String(pythonanywherebackend).trim().toLowerCase(),
-                    storageScope: getTokenStorageScope(token),
+                    storageScope: getTokenStorageScope(normalizedToken),
                     url: getPrivateBackendUrl(String(pythonanywherebackend))
                   };
                 }
@@ -673,9 +2014,9 @@ GM_addStyle(`
                   }
                 }
 
-                deleteDatabase() {
+                deleteDatabase(configSnapshot = null) {
                   return this.enqueue(async () => {
-                    const config = await this.getPrivateConfig();
+                    const config = configSnapshot || await this.getPrivateConfig();
                     if (!config) {
                       updateBackendStatusText("Privates Backend: kein Token konfiguriert.", "info");
                       return { skipped: true };
@@ -684,19 +2025,20 @@ GM_addStyle(`
                     try {
                       await this.postPrivate(config, "delete_all");
                       await this.clearPrivateSyncMarkers(config);
-                      setProgress('Privates Backend: Daten gelöscht.', 100);
+                      setProgress('Privates Backend: Daten gelöscht.', 100, "success");
                       updateBackendStatusText("Privates Backend: Daten gelöscht.", "success");
                       return { deleted: true };
                     } catch (error) {
+                      setProgress(`Privates Backend: Löschen fehlgeschlagen (${error.message}).`, 100, "error");
                       updateBackendStatusText(`Privates Backend: Löschen fehlgeschlagen (${error.message}).`, "error");
                       throw error;
                     }
                   });
                 }
 
-                downloadDatabase() {
+                downloadDatabase(configSnapshot = null) {
                   return this.enqueue(async () => {
-                    const config = await this.getPrivateConfig();
+                    const config = configSnapshot || await this.getPrivateConfig();
                     if (!config) {
                       updateBackendStatusText("Privates Backend: kein Token konfiguriert.", "info");
                       return { skipped: true };
@@ -734,49 +2076,53 @@ GM_addStyle(`
                         const timestampKey = `PRIVATE_BACKEND_TIMESTAMP_${config.backendName}_${config.storageScope}_${entry.asin}`;
                         const fingerprintKey = `PRIVATE_BACKEND_FINGERPRINT_${config.backendName}_${config.storageScope}_${entry.asin}`;
                         const remoteFingerprint = getStringFingerprint(entry.value);
-                        const localValue = await getValue(productKey);
-                        const lastSeenTimestamp = await getValue(timestampKey, null);
-                        const lastSeenFingerprint = await getValue(fingerprintKey, null);
-                        const hasComparableTimestamp = lastSeenTimestamp != null
-                          && Number.isInteger(Number(lastSeenTimestamp));
-                        const hasComparableFingerprint = typeof lastSeenFingerprint === 'string'
-                          && lastSeenFingerprint.length > 0;
-                        const isNewerRemote = hasComparableTimestamp
-                          && entry.timestamp > Number(lastSeenTimestamp);
-                        const isChangedEqualTimestamp = hasComparableTimestamp
-                          && hasComparableFingerprint
-                          && entry.timestamp === Number(lastSeenTimestamp)
-                          && remoteFingerprint !== lastSeenFingerprint;
+                        const wasUpdated = await enqueueProductOperation(entry.asin, async () => {
+                          const localValue = await getValue(productKey);
+                          const lastSeenTimestamp = await getValue(timestampKey, null);
+                          const lastSeenFingerprint = await getValue(fingerprintKey, null);
+                          const hasComparableTimestamp = lastSeenTimestamp != null
+                            && Number.isInteger(Number(lastSeenTimestamp));
+                          const hasComparableFingerprint = typeof lastSeenFingerprint === 'string'
+                            && lastSeenFingerprint.length > 0;
+                          const isNewerRemote = hasComparableTimestamp
+                            && entry.timestamp > Number(lastSeenTimestamp);
+                          const isChangedEqualTimestamp = hasComparableTimestamp
+                            && hasComparableFingerprint
+                            && entry.timestamp === Number(lastSeenTimestamp)
+                            && remoteFingerprint !== lastSeenFingerprint;
 
-                        if (
-                          !localValue
-                          || !hasComparableTimestamp
-                          || !hasComparableFingerprint
-                          || isNewerRemote
-                          || isChangedEqualTimestamp
-                        ) {
-                          await setValue(productKey, entry.value);
-                          await setValue(timestampKey, entry.timestamp);
-                          await setValue(fingerprintKey, remoteFingerprint);
-                          updated++;
-                        } else {
-                          unchanged++;
-                        }
+                          if (
+                            !localValue
+                            || !hasComparableTimestamp
+                            || !hasComparableFingerprint
+                            || isNewerRemote
+                            || isChangedEqualTimestamp
+                          ) {
+                            await setValue(productKey, entry.value);
+                            await setValue(timestampKey, entry.timestamp);
+                            await setValue(fingerprintKey, remoteFingerprint);
+                            return true;
+                          }
+                          return false;
+                        });
+                        if (wasUpdated) updated++;
+                        else unchanged++;
                       }
 
-                      setProgress(`Privates Backend: Download abgeschlossen (${updated} aktualisiert, ${unchanged} unverändert).`, 100);
+                      setProgress(`Privates Backend: Download abgeschlossen (${updated} aktualisiert, ${unchanged} unverändert).`, 100, "success");
                       updateBackendStatusText(`Privates Backend: Download erfolgreich (${updated} aktualisiert, ${unchanged} unverändert).`, "success");
                       return { updated, unchanged };
                     } catch (error) {
+                      setProgress(`Privates Backend: Download fehlgeschlagen (${error.message}).`, 100, "error");
                       updateBackendStatusText(`Privates Backend: Download fehlgeschlagen (${error.message}).`, "error");
                       throw error;
                     }
                   });
                 }
 
-                uploadLocalDatabase() {
+                uploadLocalDatabase(configSnapshot = null) {
                   return this.enqueue(async () => {
-                    const config = await this.getPrivateConfig();
+                    const config = configSnapshot || await this.getPrivateConfig();
                     if (!config) {
                       updateBackendStatusText("Privates Backend: kein Token konfiguriert.", "info");
                       return { skipped: true };
@@ -814,10 +2160,11 @@ GM_addStyle(`
 
                       setProgress(`Privates Backend: ${payload.length} Produkte werden hochgeladen ...`, 0);
                       await this.postPrivate(config, "update_asin", payload);
-                      setProgress(`Privates Backend: ${payload.length} Produkte hochgeladen.`, 100);
+                      setProgress(`Privates Backend: ${payload.length} Produkte hochgeladen.`, 100, "success");
                       updateBackendStatusText(`Privates Backend: Upload erfolgreich (${payload.length} Produkte).`, "success");
                       return { uploaded: payload.length, invalidDates };
                     } catch (error) {
+                      setProgress(`Privates Backend: Upload fehlgeschlagen (${error.message}).`, 100, "error");
                       updateBackendStatusText(`Privates Backend: Upload fehlgeschlagen (${error.message}).`, "error");
                       throw error;
                     }
@@ -860,7 +2207,7 @@ GM_addStyle(`
                         'https://hutaufvine.pythonanywhere.com/upload_asins',
                         anonPayload
                       );
-                      if (responseData?.status && responseData.status !== 'success') {
+                      if (responseData?.status !== 'success') {
                         throw new Error(responseData.message || 'Teilwert backend rejected the request.');
                       }
                       const existingAsins = Array.isArray(responseData?.existing_asins)
@@ -882,17 +2229,13 @@ GM_addStyle(`
                         );
                         const asin = normalizeAsin(existingAsin?.asin);
                         if (!asin) continue;
-                        const asinKey = `ASIN_${asin}`;
-                        const localValue = await getValue(asinKey);
-                        if (!localValue) continue;
-                        const updated = {
-                          ...parseStoredProduct(localValue, `local product ${asin}`),
+                        await updateStoredProduct(asin, current => ({
+                          ...current,
                           keepa: existingAsin.keepa,
                           teilwert: existingAsin.teilwert,
                           teilwert_v2: existingAsin.teilwert_v2,
                           pdf: existingAsin.pdf
-                        };
-                        await setValue(asinKey, JSON.stringify(updated));
+                        }));
                       }
                       if (needFullSync) {
                         await setValue('last_full_sync', Date.now());
@@ -1020,73 +2363,197 @@ GM_addStyle(`
 
                 async createButtons() {
                   const container = document.createElement('div');
+                  const token = await getValue('token');
+                  const backendName = await getValue('pythonanywherebackend', 'hutaufvine');
+                  const initialModel = getBackendUiModel(token, backendName);
+                  container.className = 'vtt-dialog-section';
                   container.innerHTML = `
-                    <button id="setTokenButton" style="margin-top: 10px;">Set token</button>
-                    <button id="setBackendButton" style="margin-top: 10px;">Set backend</button>
-                    <button id="uploadButton" style="margin-top: 10px;">Upload data</button>
-                    <button id="downloadButton" style="margin-top: 10px;">Download data</button>
-                    <button id="deleteButton" style="margin-top: 10px;">Delete data</button>
-                  `;
-                    const backendName = await getValue('pythonanywherebackend', 'hutaufvine');
-                    const backendLabel = document.createElement('span');
-                    backendLabel.id = 'backendLabel';
-                    backendLabel.style.marginLeft = '10px';
-                    backendLabel.style.fontWeight = 'bold';
-                    backendLabel.textContent = `Backend: ${backendName}`;
-                    container.appendChild(backendLabel);
-                    const backendStatus = document.createElement('span');
-                    backendStatus.id = 'backendStatus';
-                    backendStatus.style.marginLeft = '8px';
-                    backendStatus.style.fontSize = '12px';
-                    backendStatus.textContent = '';
-                    container.appendChild(backendStatus);
+                    <div
+                      id="backendConfigurationState"
+                      class="vtt-backend-state"
+                      data-backend-state="${escapeHtml(initialModel.state)}"
+                    >
+                      <span class="vtt-dot" aria-hidden="true"></span>${escapeHtml(initialModel.title)}
+                    </div>
 
-                  container.querySelector('#setTokenButton').addEventListener('click', async () => {
-                    const token = prompt('Enter token:');
-                    if (token === null) return;
-                    const normalizedToken = token.trim();
-                    if (!normalizedToken) {
-                      alert('Token darf nicht leer sein.');
-                      return;
+                    <div class="vtt-callout">
+                      Das private Backend überträgt deine vollständigen Produktdaten automatisch an den
+                      <a href="${VINE_PRODUCT_MANAGER_URL}" target="_blank" rel="noopener noreferrer"><strong>Vine-Produkt-Manager öffnen</strong></a>.
+                      Der öffentliche Teilwertschätzer erhält weiterhin nur ASIN, Titel und ETV.
+                    </div>
+
+                    <div class="vtt-form-grid">
+                      <label class="vtt-field" for="backendNameInput">
+                        Backendname
+                        <input
+                          id="backendNameInput"
+                          type="text"
+                          value="${escapeHtml(initialModel.backendName)}"
+                          autocomplete="off"
+                          spellcheck="false"
+                        >
+                        <span class="vtt-help-text">PythonAnywhere-Benutzername; Standard ist hutaufvine.</span>
+                      </label>
+                      <label class="vtt-field" for="backendTokenInput">
+                        Persönlicher Token
+                        <input
+                          id="backendTokenInput"
+                          type="password"
+                          value=""
+                          autocomplete="new-password"
+                          placeholder="${initialModel.configured ? 'Token ist hinterlegt – leer lassen, um ihn beizubehalten' : 'Persönlichen Token einfügen'}"
+                        >
+                        <span class="vtt-help-text">Der gespeicherte Token wird aus Sicherheitsgründen niemals angezeigt.</span>
+                      </label>
+                    </div>
+
+                    <div class="vtt-button-group">
+                      <button id="saveBackendButton" class="vtt-btn vtt-btn-primary" type="button">Konfiguration speichern</button>
+                      <span id="backendLabel" class="vtt-help-text">Backend: ${escapeHtml(initialModel.backendName)}</span>
+                    </div>
+
+                    <div class="vtt-dialog-section">
+                      <h3 class="vtt-section-title">Manuelle Synchronisation</h3>
+                      <p class="vtt-help-text">
+                        Normalerweise läuft der Voll-Sync automatisch. Diese Aktionen helfen bei einem Gerätewechsel oder zur Fehlerbehebung.
+                      </p>
+                      <div class="vtt-button-group">
+                        <button id="uploadButton" class="vtt-btn" type="button"${initialModel.configured ? '' : ' disabled'}>Lokale Daten hochladen</button>
+                        <button id="downloadButton" class="vtt-btn" type="button"${initialModel.configured ? '' : ' disabled'}>Serverdaten herunterladen</button>
+                      </div>
+                    </div>
+
+                    <div id="backendStatus" role="status" aria-live="polite"></div>
+
+                    <section class="vtt-danger-zone" aria-labelledby="vtt-danger-title">
+                      <h4 id="vtt-danger-title">Danger Zone</h4>
+                      <p>
+                        Löscht alle Produktdaten auf deinem privaten Backend. Die lokalen Daten in diesem Browser bleiben erhalten.
+                      </p>
+                      <div>
+                        <button id="deleteButton" class="vtt-btn vtt-btn-danger" type="button"${initialModel.configured ? '' : ' disabled'}>
+                          Serverdaten unwiderruflich löschen
+                        </button>
+                      </div>
+                    </section>
+                  `;
+
+                  const actionButtons = Array.from(
+                    container.querySelectorAll('#uploadButton, #downloadButton, #deleteButton')
+                  );
+                  let lastKnownConfigured = initialModel.configured;
+                  const setBackendActionsBusy = (busy, configured = lastKnownConfigured) => {
+                    backendUiBusy = busy;
+                    if (!busy) lastKnownConfigured = Boolean(configured);
+                    actionButtons.forEach(button => {
+                      button.disabled = busy || !lastKnownConfigured;
+                    });
+                    for (const id of ['saveBackendButton', 'backendNameInput', 'backendTokenInput']) {
+                      const control = container.querySelector(`#${id}`);
+                      if (control) control.disabled = busy;
                     }
-                    await setValue('token', normalizedToken);
-                    updateBackendStatusText('Status: Token gespeichert.', 'success');
-                  });
-                  container.querySelector('#setBackendButton').addEventListener('click', async () => {
-                    const pythonanywherebackend = prompt('Enter pythonanywhere backend name (pythonanywhere user account name):');
-                    if (pythonanywherebackend === null) return;
-                    const normalizedBackend = pythonanywherebackend.trim().toLowerCase();
+                  };
+                  const refreshBackendStatusSafely = async () => {
+                    try {
+                      await refreshDashboardStatusCards();
+                    } catch (error) {
+                      console.error('Could not refresh private backend status:', error);
+                      updateBackendStatusText(
+                        `Backendstatus konnte nicht aktualisiert werden: ${error.message}`,
+                        'error'
+                      );
+                    }
+                  };
+
+                  container.querySelector('#saveBackendButton').addEventListener('click', async () => {
+                    const normalizedBackend = container.querySelector('#backendNameInput').value.trim().toLowerCase();
+                    const newToken = container.querySelector('#backendTokenInput').value.trim();
                     if (!isValidBackendName(normalizedBackend)) {
                       alert('Ungültiger PythonAnywhere-Benutzername.');
                       return;
                     }
-                    await setValue('pythonanywherebackend', normalizedBackend);
-                    document.getElementById('backendLabel').textContent = `Backend: ${normalizedBackend}`;
-                    updateBackendStatusText('Status: Backend geändert.', 'success');
+                    let configuredAfterSave = lastKnownConfigured;
+                    setBackendActionsBusy(true);
+                    try {
+                      const existingToken = await getValue('token');
+                      if (!newToken && !(typeof existingToken === 'string' && existingToken.trim())) {
+                        updateBackendStatusText('Bitte zuerst einen persönlichen Token eintragen.', 'error');
+                        container.querySelector('#backendTokenInput').focus();
+                        return;
+                      }
+                      await this.enqueue(async () => {
+                          await setValue('pythonanywherebackend', normalizedBackend);
+                          if (newToken) await setValue('token', newToken);
+                      });
+                      configuredAfterSave = true;
+                      container.querySelector('#backendNameInput').value = normalizedBackend;
+                      container.querySelector('#backendTokenInput').value = '';
+                      updateBackendStatusText('Konfiguration gespeichert. Der nächste Voll-Sync verwendet diese Verbindung.', 'success');
+                    } catch (error) {
+                      console.error('Could not save private backend configuration:', error);
+                      updateBackendStatusText(`Konfiguration konnte nicht gespeichert werden: ${error.message}`, 'error');
+                    } finally {
+                      setBackendActionsBusy(false, configuredAfterSave);
+                      await refreshBackendStatusSafely();
+                    }
                   });
 
                   container.querySelector('#uploadButton').addEventListener('click', async () => {
+                    let config = null;
+                    setBackendActionsBusy(true);
                     try {
-                      await this.uploadLocalDatabase();
+                      config = await this.getPrivateConfig();
+                      if (!config) {
+                        updateBackendStatusText('Privates Backend: kein Token konfiguriert.', 'info');
+                        return;
+                      }
+                      await this.uploadLocalDatabase(config);
                     } catch (error) {
                       console.error('Private backend upload failed:', error.message);
+                    } finally {
+                      setBackendActionsBusy(false, Boolean(config));
+                      await refreshBackendStatusSafely();
                     }
                   });
 
                   container.querySelector('#downloadButton').addEventListener('click', async () => {
+                    let config = null;
+                    setBackendActionsBusy(true);
                     try {
-                      await this.downloadDatabase();
+                      config = await this.getPrivateConfig();
+                      if (!config) {
+                        updateBackendStatusText('Privates Backend: kein Token konfiguriert.', 'info');
+                        return;
+                      }
+                      await this.downloadDatabase(config);
+                      await requestDashboardRefresh();
                     } catch (error) {
                       console.error('Private backend download failed:', error.message);
+                    } finally {
+                      setBackendActionsBusy(false, Boolean(config));
+                      await refreshBackendStatusSafely();
                     }
                   });
 
                   container.querySelector('#deleteButton').addEventListener('click', async () => {
-                    if (!confirm('Wirklich alle Daten auf dem privaten Backend löschen?')) return;
+                    let config = null;
+                    setBackendActionsBusy(true);
                     try {
-                      await this.deleteDatabase();
+                      config = await this.getPrivateConfig();
+                      if (!config) {
+                        updateBackendStatusText('Privates Backend: kein Token konfiguriert.', 'info');
+                        return;
+                      }
+                      if (!confirm(
+                        `Danger Zone: Wirklich alle Produktdaten bei „${config.backendName}“ unwiderruflich löschen? `
+                        + 'Die lokalen Daten in diesem Browser bleiben erhalten.'
+                      )) return;
+                      await this.deleteDatabase(config);
                     } catch (error) {
                       console.error('Private backend delete failed:', error.message);
+                    } finally {
+                      setBackendActionsBusy(false, Boolean(config));
+                      await refreshBackendStatusSafely();
                     }
                   });
 
@@ -1101,7 +2568,9 @@ GM_addStyle(`
 
               async function load_all_asin_etv_values_from_storage(progressOptions = null) {
                   const automaticSyncStep = progressOptions?.automaticSyncStep;
+                  const shouldReportProgress = progressOptions !== false;
                   const updateLocalLoadProgress = (text, fraction) => {
+                    if (!shouldReportProgress) return;
                     if (automaticSyncStep) {
                       setAutomaticSyncStep(automaticSyncStep, text, fraction);
                     } else {
@@ -1158,9 +2627,11 @@ GM_addStyle(`
                 const progressBarContainer = document.createElement('div');
                 progressBarContainer.id = 'simpleProgressBarContainer';
                 progressBarContainer.setAttribute('role', 'progressbar');
+                progressBarContainer.setAttribute('aria-label', 'Fortschritt von VineTaxTools');
                 progressBarContainer.setAttribute('aria-valuemin', '0');
                 progressBarContainer.setAttribute('aria-valuemax', '100');
                 progressBarContainer.setAttribute('aria-valuenow', '0');
+                progressBarContainer.setAttribute('aria-valuetext', 'Vorbereitung läuft');
                 progressBarContainer.style.border = '1px solid #6f8fbd';
                 progressBarContainer.style.borderRadius = '6px';
                 progressBarContainer.style.display = 'flex';
@@ -1184,7 +2655,6 @@ GM_addStyle(`
 
                 const progressText = document.createElement('span');
                 progressText.id = 'simpleProgressText';
-                progressText.setAttribute('aria-live', 'polite');
                 progressText.style.position = 'relative';
                 progressText.style.zIndex = '1';
                 progressText.style.padding = '7px 10px';
@@ -1208,6 +2678,11 @@ GM_addStyle(`
                   },
                   setText: (text) => {
                     progressText.innerText = text;
+                    progressBarContainer.setAttribute('aria-valuetext', text);
+                  },
+                  setState: (state) => {
+                    const safeState = ['info', 'success', 'error'].includes(state) ? state : 'info';
+                    progressBarContainer.dataset.state = safeState;
                   },
                   hide: () => {
                     progressBarContainer.style.display = 'none';
@@ -1219,61 +2694,239 @@ GM_addStyle(`
               }
 
               async function createUI_taxextractor() {
+                  if (document.getElementById('vine-data-extractor')) return;
                   const container = document.querySelector('#vvp-tax-information-container');
                   if (!container) {
                       setTimeout(createUI_taxextractor, 500);
                       return;
                   }
-                  const progressBar = createSimpleProgressBar(container, false);
+                  const progressBar = createSimpleProgressBar(container, true);
+                  progressBarController = progressBar;
                   window.progressBar = progressBar;
                   const div = document.createElement('div');
+                  setAutomaticSyncStep(1, 'Oberfläche wird aufgebaut ...', 0.1);
+                  const settings = await getSettings();
                   div.innerHTML = `
-                    <div id="vine-data-extractor" style="margin: 12px 0 20px 0; border: 2px solid #1a73e8; border-radius: 10px; padding: 12px; background: linear-gradient(180deg, #f7faff 0%, #eef5ff 100%);">
-                        <div style="font-weight:700; margin-bottom: 4px; color:#1a2b4a;">VineTaxTools</div>
-                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom: 8px;">
-                            <label for="load-xlsx-year" style="font-size:12px; color:#333;">Jahr:</label>
-                            <select id="load-xlsx-year"></select>
-                            <button id="load-xlsx-info" class="">Load XLSX Info</button>
-                            <button id="show-all-data">Show All Data</button>
-                            <button id="export-db">Export DB</button>
-                            <button id="import-db">Import DB</button>
-                             <button id="export-xlsx">Export XLSX</button>
-                             <button id="copy-pdf-list">Copy PDF link list</button>
+                    <div id="vine-data-extractor" class="vtt-shell">
+                      <header class="vtt-header">
+                        <div class="vtt-brand">
+                          <div class="vtt-brand-mark" aria-hidden="true">VT</div>
+                          <div>
+                            <h2 class="vtt-title">VineTaxTools</h2>
+                            <p class="vtt-subtitle">Amazon-Vine-Daten sichern, synchronisieren und steuerlich auswerten.</p>
+                          </div>
                         </div>
-                        <div id="status" style="margin-top: 10px; font-size: 13px;"></div>
+                        <nav class="vtt-header-actions" aria-label="VineTaxTools-Menü">
+                          <button class="vtt-btn" type="button" data-vtt-open-dialog="vtt-data-dialog">Daten &amp; Backup</button>
+                          <button class="vtt-btn" type="button" data-vtt-open-dialog="vtt-settings-dialog">Einstellungen</button>
+                          <button class="vtt-btn" type="button" data-vtt-open-dialog="vtt-backend-dialog">Synchronisation</button>
+                        </nav>
+                      </header>
+
+                      <div class="vtt-body">
+                        <section class="vtt-status-grid" aria-label="Datenstatus">
+                          <div class="vtt-status-card">
+                            <span class="vtt-status-icon" aria-hidden="true">DB</span>
+                            <span class="vtt-status-copy">
+                              <span class="vtt-status-label">Lokaler Datenbestand</span>
+                              <span id="vtt-storage-value" class="vtt-status-value">Wird ermittelt …</span>
+                              <span id="vtt-storage-detail" class="vtt-status-detail">Dexie / IndexedDB in diesem Browser</span>
+                            </span>
+                          </div>
+                          <button
+                            id="vtt-backend-summary"
+                            class="vtt-status-card"
+                            type="button"
+                            data-backend-state="local-only"
+                            data-vtt-open-dialog="vtt-backend-dialog"
+                          >
+                            <span class="vtt-status-icon" aria-hidden="true">↕</span>
+                            <span class="vtt-status-copy">
+                              <span class="vtt-status-label">Privates Backend</span>
+                              <span id="vtt-backend-value" class="vtt-status-value"><span class="vtt-dot" aria-hidden="true"></span>Status wird geprüft …</span>
+                              <span id="vtt-backend-detail" class="vtt-status-detail">Konfiguration wird geladen.</span>
+                            </span>
+                          </button>
+                        </section>
+
+                        <aside id="vtt-local-only-warning" class="vtt-callout vtt-callout-warning">
+                          <strong>Deine Produktdaten liegen derzeit nur in diesem Browser.</strong>
+                          Exportiere regelmäßig ein Produktdaten-Backup oder richte die Synchronisation mit dem
+                          <a href="${VINE_PRODUCT_MANAGER_URL}" target="_blank" rel="noopener noreferrer">Vine-Produkt-Manager</a> ein.
+                          <button id="vtt-warning-export-db" class="vtt-btn" type="button">Jetzt Backup exportieren</button>
+                        </aside>
+
+                        <section class="vtt-panel" aria-labelledby="vtt-import-title">
+                          <div class="vtt-panel-heading">
+                            <div>
+                              <h3 id="vtt-import-title" class="vtt-panel-title">
+                                Amazon-Steuerdaten einlesen
+                                <button
+                                  class="vtt-info"
+                                  type="button"
+                                  aria-label="Hilfe zum Amazon-Import"
+                                  data-help="Lädt den offiziellen Vine-Steuerbericht für das gewählte Jahr, ergänzt lokale Produkte und erkennt Stornierungen."
+                                >i</button>
+                              </h3>
+                              <p class="vtt-panel-description">Wähle ein Jahr und aktualisiere deinen lokalen Datenbestand mit dem offiziellen XLSX-Bericht.</p>
+                            </div>
+                          </div>
+                          <div class="vtt-import-grid">
+                            <label class="vtt-field" for="load-xlsx-year">
+                              Berichtsjahr
+                              <select id="load-xlsx-year"></select>
+                            </label>
+                            <button id="load-xlsx-info" class="vtt-btn vtt-btn-primary" type="button">Amazon-Daten importieren</button>
+                            <div class="vtt-action-row">
+                              <button id="show-all-data" class="vtt-btn" type="button">Datentabelle anzeigen</button>
+                              <button class="vtt-btn" type="button" data-vtt-open-dialog="vtt-data-dialog">Exporte öffnen</button>
+                            </div>
+                          </div>
+                        </section>
+
                         <div id="sync-progress-slot"></div>
+                        <div id="status" role="status" aria-live="polite"></div>
+
+                        <details id="vtt-results-section" class="vtt-disclosure" open>
+                          <summary>
+                            <span>Auswertungen &amp; Diagramme</span>
+                            <span class="vtt-summary-meta">Jahre und Ansichten einzeln aufklappbar</span>
+                          </summary>
+                          <div id="vtt-analysis-content" class="vtt-disclosure-body">
+                            <div class="vtt-empty-state">Die Auswertung wird vorbereitet …</div>
+                          </div>
+                        </details>
+
+                        <details id="vtt-data-section" class="vtt-disclosure">
+                          <summary>
+                            <span>Produktdatentabelle</span>
+                            <span class="vtt-summary-meta">mit den aktuell gespeicherten Tabellenfiltern</span>
+                          </summary>
+                          <div class="vtt-disclosure-body">
+                            <div id="vtt-table-filter-summary" class="vtt-filter-summary" aria-live="polite"></div>
+                            <div id="data-table"></div>
+                          </div>
+                        </details>
+                      </div>
+
+                      <dialog id="vtt-settings-dialog" class="vtt-dialog" role="dialog" aria-modal="true" aria-labelledby="vtt-settings-title">
+                        <header class="vtt-dialog-header">
+                          <div>
+                            <h2 id="vtt-settings-title" class="vtt-dialog-title">Filter &amp; Steuerregeln</h2>
+                            <p class="vtt-dialog-subtitle">Änderungen werden gespeichert und offene Ansichten automatisch aktualisiert.</p>
+                          </div>
+                          <button class="vtt-dialog-close" type="button" data-vtt-close-dialog aria-label="Dialog schließen">×</button>
+                        </header>
+                        <div class="vtt-dialog-body">
+                          <section class="vtt-dialog-section" aria-labelledby="vtt-table-filter-title">
+                            <h3 id="vtt-table-filter-title" class="vtt-section-title">Tabellenfilter</h3>
+                            <label class="vtt-field" for="yearFilter">
+                              Angezeigtes Steuerjahr
+                              <select id="yearFilter">${buildYearFilterOptionsHtml(settings)}</select>
+                            </label>
+                            <div class="vtt-settings-list">
+                              <label class="vtt-setting-row">
+                                <input type="checkbox" id="cancellations" ${settings.cancellations ? 'checked' : ''}>
+                                <span>
+                                  <span class="vtt-setting-label">Stornierungen in Tabelle und Exporten berücksichtigen</span>
+                                  <span class="vtt-setting-description">Ausgeschaltet werden ASINs ausgeblendet, die der Amazon-Bericht als storniert erkannt hat.</span>
+                                </span>
+                              </label>
+                              <label class="vtt-setting-row">
+                                <input type="checkbox" id="tax0" ${settings.tax0 ? 'checked' : ''}>
+                                <span>
+                                  <span class="vtt-setting-label">Produkte mit 0 € ETV berücksichtigen</span>
+                                  <span class="vtt-setting-description">Steuert Tabellenzeilen und gefilterte Exporte; Übersichtsdiagramme können 0-€-Produkte weiterhin separat zählen.</span>
+                                </span>
+                              </label>
+                              <label class="vtt-setting-row">
+                                <input type="checkbox" id="useTeilwertV2" ${settings.useTeilwertV2 ? 'checked' : ''}>
+                                <span>
+                                  <span class="vtt-setting-label">Teilwert V2 verwenden</span>
+                                  <span class="vtt-setting-description">Nutzt den neueren Teilwert und dessen PDF-Nachweis, sofern vorhanden; manuelle Werte haben weiterhin Vorrang.</span>
+                                </span>
+                              </label>
+                            </div>
+                          </section>
+
+                          <section class="vtt-dialog-section" aria-labelledby="vtt-evaluation-rules-title">
+                            <h3 id="vtt-evaluation-rules-title" class="vtt-section-title">Auswertungsregeln</h3>
+                            <p class="vtt-help-text">Diese Regeln verändern Berechnungen und Jahresauswertungen, aber nicht zwingend die Tabellenzeilen.</p>
+                            <div class="vtt-settings-list">
+                              <label class="vtt-setting-row">
+                                <input type="checkbox" id="streuartikelregelung" ${settings.streuartikelregelung ? 'checked' : ''}>
+                                <span>
+                                  <span class="vtt-setting-label">Streuartikelregelung nach ETV anwenden</span>
+                                  <span class="vtt-setting-description">Produkte mit einem ETV bis 11,90 € werden aus der Teilwert-/EÜR-Zusammenfassung ausgeschlossen.</span>
+                                </span>
+                              </label>
+                              <label class="vtt-setting-row">
+                                <input type="checkbox" id="streuartikelregelungTeilwert" ${settings.streuartikelregelungTeilwert ? 'checked' : ''}>
+                                <span>
+                                  <span class="vtt-setting-label">Streuartikelregelung auf Teilwert vor Oktober 2024</span>
+                                  <span class="vtt-setting-description">Vor dem 01.10.2024 bleiben dort nur Produkte mit einem Teilwert über 11,90 € in der Zusammenfassung.</span>
+                                </span>
+                              </label>
+                              <label class="vtt-setting-row">
+                                <input type="checkbox" id="add2ndhalf2023to2024" ${settings.add2ndhalf2023to2024 ? 'checked' : ''}>
+                                <span>
+                                  <span class="vtt-setting-label">2. Jahreshälfte 2023 dem Steuerjahr 2024 zurechnen</span>
+                                  <span class="vtt-setting-description">Juli bis Dezember 2023 werden in Tabellenfilter und Jahresauswertung dem Jahr 2024 zugeordnet.</span>
+                                </span>
+                              </label>
+                              <label class="vtt-setting-row">
+                                <input type="checkbox" id="einnahmezumteilwert" ${settings.einnahmezumteilwert ? 'checked' : ''}>
+                                <span>
+                                  <span class="vtt-setting-label">EÜR: Einnahme vor Oktober 2024 zum Teilwert</span>
+                                  <span class="vtt-setting-description">Verwendet für die historische EÜR-Berechnung den Teilwert anstelle des ursprünglichen ETV.</span>
+                                </span>
+                              </label>
+                            </div>
+                          </section>
+                          <p id="vtt-settings-summary" class="vtt-help-text"></p>
+                        </div>
+                      </dialog>
+
+                      <dialog id="vtt-backend-dialog" class="vtt-dialog" role="dialog" aria-modal="true" aria-labelledby="vtt-backend-title">
+                        <header class="vtt-dialog-header">
+                          <div>
+                            <h2 id="vtt-backend-title" class="vtt-dialog-title">Synchronisation &amp; Vine-Produkt-Manager</h2>
+                            <p class="vtt-dialog-subtitle">Richte dein privates Backend ein oder führe eine manuelle Synchronisation aus.</p>
+                          </div>
+                          <button class="vtt-dialog-close" type="button" data-vtt-close-dialog aria-label="Dialog schließen">×</button>
+                        </header>
+                        <div id="vtt-backend-panel-slot" class="vtt-dialog-body"></div>
+                      </dialog>
+
+                      <dialog id="vtt-data-dialog" class="vtt-dialog" role="dialog" aria-modal="true" aria-labelledby="vtt-data-title">
+                        <header class="vtt-dialog-header">
+                          <div>
+                            <h2 id="vtt-data-title" class="vtt-dialog-title">Daten, Backup &amp; Exporte</h2>
+                            <p class="vtt-dialog-subtitle">Sichere lokale Produktdaten oder exportiere die aktuell gefilterte Ansicht.</p>
+                          </div>
+                          <button class="vtt-dialog-close" type="button" data-vtt-close-dialog aria-label="Dialog schließen">×</button>
+                        </header>
+                        <div class="vtt-dialog-body">
+                          <section class="vtt-dialog-section">
+                            <h3 class="vtt-section-title">Lokales Produktdaten-Backup</h3>
+                            <p class="vtt-help-text">Das JSON-Backup enthält die gespeicherten ASIN-Produktobjekte. Token, Einstellungen und Sync-Metadaten werden nicht exportiert.</p>
+                            <div class="vtt-button-group">
+                              <button id="export-db" class="vtt-btn vtt-btn-primary" type="button">Produktdaten exportieren</button>
+                              <button id="import-db" class="vtt-btn" type="button">Produktdaten importieren</button>
+                            </div>
+                          </section>
+                          <section class="vtt-dialog-section">
+                            <h3 class="vtt-section-title">Gefilterte Daten weiterverwenden</h3>
+                            <p class="vtt-help-text">Diese Exporte verwenden die aktuell gespeicherten Tabellenfilter aus den Einstellungen.</p>
+                            <div class="vtt-button-group">
+                              <button id="export-xlsx" class="vtt-btn" type="button">Gefilterte XLSX exportieren</button>
+                              <button id="copy-pdf-list" class="vtt-btn" type="button">PDF-Linkliste kopieren</button>
+                            </div>
+                          </section>
+                        </div>
+                      </dialog>
                     </div>
                 `;
-                        const settings = await getValue("settings", {
-                            cancellations: false,
-                            tax0: false,
-                            yearFilter: "show all years",
-                            streuartikelregelung: true,
-                            streuartikelregelungTeilwert: true,
-                            add2ndhalf2023to2024: true,
-                            einnahmezumteilwert: true,
-                            useTeilwertV2: false
-                        });
-
-                        const settingsDiv = document.createElement('div');
-                        settingsDiv.innerHTML = `
-                            <div style="margin-top: 8px; border: 1px solid #9ab6e8; border-radius: 8px; padding: 10px; background: #ffffff;">
-                                <label><input type="checkbox" id="cancellations" ${settings.cancellations ? 'checked' : ''}> Cancellations berücksichtigen</label>
-                                <label><input type="checkbox" id="tax0" ${settings.tax0 ? 'checked' : ''}> tax0 berücksichtigen</label>
-                                <label><input type="checkbox" id="streuartikelregelung" ${settings.streuartikelregelung ? 'checked' : ''}> Streuartikelregelung anwenden</label>
-                                <label><input type="checkbox" id="streuartikelregelungTeilwert" ${settings.streuartikelregelungTeilwert ? 'checked' : ''}> Streuartikelregelung auf Teilwert vor 10/2024</label>
-                                <label><input type="checkbox" id="add2ndhalf2023to2024" ${settings.add2ndhalf2023to2024 ? 'checked' : ''}> 2. Jahreshälfte 2023 in 2024 versteuern</label>
-                                <label><input type="checkbox" id="einnahmezumteilwert" ${settings.einnahmezumteilwert ? 'checked' : ''}> EÜR: Einnahme zum Teilwert vor 10/2024</label>
-                                <label><input type="checkbox" id="useTeilwertV2" ${settings.useTeilwertV2 ? 'checked' : ''}> Teilwert V2 verwenden</label>
-                                <select id="yearFilter">
-                                    ${buildYearFilterOptionsHtml(settings)}
-                                </select>
-
-                            </div>
-                        `;
-
-                        settingsDiv.appendChild(await backendHandler.createButtons());
-                        div.appendChild(settingsDiv);
                         container.appendChild(div);
                         const progressSlot = div.querySelector('#sync-progress-slot');
                         if (progressSlot) {
@@ -1282,6 +2935,28 @@ GM_addStyle(`
                           container.appendChild(progressBar.element);
                         }
                         setAutomaticSyncStep(1, 'Oberfläche und Sync-Einstellungen werden vorbereitet ...', 0.25);
+                        const backendPanelSlot = div.querySelector('#vtt-backend-panel-slot');
+                        backendPanelSlot.appendChild(await backendHandler.createButtons());
+                        initializeDialogInteractions(div);
+                        initializeInfoInteractions(div);
+                        const dataSection = div.querySelector('#vtt-data-section');
+                        dataSection?.addEventListener('toggle', () => {
+                          if (!dataSection.open) return;
+                          const dataTable = div.querySelector('#data-table');
+                          if (dataTable?.dataset.rendered !== 'true') {
+                            showAllData({ openSection: false }).catch(error => {
+                              console.error('Could not render the product table after opening it:', error);
+                              updateStatusMessage(
+                                `Produktdatentabelle konnte nicht geladen werden: ${error.message}`,
+                                'error'
+                              );
+                            });
+                            return;
+                          }
+                          setTimeout(adjustExistingAsinDataTable, 0);
+                        });
+                        renderSettingsSummary(settings);
+                        await refreshDashboardStatusCards();
                         const xlsxYearSelect = document.getElementById('load-xlsx-year');
                         initializeXlsxYearSelector(xlsxYearSelect).catch(error => {
                           console.warn('Amazon year selector initialization failed:', error);
@@ -1292,57 +2967,28 @@ GM_addStyle(`
                           1
                         );
 
-                        const waitForElement = (selector) => {
-                            return new Promise((resolve) => {
-                                const interval = setInterval(() => {
-                                    if (document.querySelector(selector)) {
-                                        clearInterval(interval);
-                                        resolve(document.querySelector(selector));
-                                    }
-                                }, 100);
+                        const booleanSettingIds = [
+                          'cancellations',
+                          'tax0',
+                          'streuartikelregelung',
+                          'streuartikelregelungTeilwert',
+                          'add2ndhalf2023to2024',
+                          'einnahmezumteilwert',
+                          'useTeilwertV2'
+                        ];
+                        booleanSettingIds.forEach(settingId => {
+                          document.getElementById(settingId).addEventListener('change', event => {
+                            persistSettingAndRefresh(settingId, event.target.checked).catch(error => {
+                              console.error(`Could not update setting ${settingId}:`, error);
+                              updateStatusMessage(`Einstellung konnte nicht gespeichert werden: ${error.message}`, 'error');
                             });
-                        };
-
-                        await waitForElement('#cancellations');
-
-                        document.getElementById('cancellations').addEventListener('change', async (event) => {
-                            settings.cancellations = event.target.checked;
-                            await setValue("settings", settings);
+                          });
                         });
-
-                        document.getElementById('tax0').addEventListener('change', async (event) => {
-                            settings.tax0 = event.target.checked;
-                            await setValue("settings", settings);
-                        });
-
-                        document.getElementById('streuartikelregelung').addEventListener('change', async (event) => {
-                            settings.streuartikelregelung = event.target.checked;
-                            await setValue("settings", settings);
-                        });
-
-                        document.getElementById('streuartikelregelungTeilwert').addEventListener('change', async (event) => {
-                            settings.streuartikelregelungTeilwert = event.target.checked;
-                            await setValue("settings", settings);
-                        });
-
-                        document.getElementById('yearFilter').addEventListener('change', async (event) => {
-                            settings.yearFilter = event.target.value;
-                            await setValue("settings", settings);
-                        });
-
-                        document.getElementById('add2ndhalf2023to2024').addEventListener('change', async (event) => {
-                            settings.add2ndhalf2023to2024 = event.target.checked;
-                            await setValue("settings", settings);
-                        });
-
-                        document.getElementById('einnahmezumteilwert').addEventListener('change', async (event) => {
-                            settings.einnahmezumteilwert = event.target.checked;
-                            await setValue("settings", settings);
-                        });
-
-                        document.getElementById('useTeilwertV2').addEventListener('change', async (event) => {
-                            settings.useTeilwertV2 = event.target.checked;
-                            await setValue("settings", settings);
+                        document.getElementById('yearFilter').addEventListener('change', event => {
+                          persistSettingAndRefresh('yearFilter', event.target.value).catch(error => {
+                            console.error('Could not update year filter:', error);
+                            updateStatusMessage(`Jahresfilter konnte nicht gespeichert werden: ${error.message}`, 'error');
+                          });
                         });
 
 
@@ -1357,18 +3003,16 @@ GM_addStyle(`
                     a.download = 'database.json';
                     a.click();
                     URL.revokeObjectURL(url);
+                    updateStatusMessage(`Produktdaten-Backup exportiert (${Object.keys(asinDataAll).length} Produkte).`, 'success');
+                });
+                document.getElementById('vtt-warning-export-db').addEventListener('click', () => {
+                  document.getElementById('export-db').click();
                 });
 
                 document.getElementById('export-xlsx').addEventListener('click', async () => {
                     let asinData = await load_all_asin_etv_values_from_storage(false);
 
-
-                    const settings = await getValue("settings", {
-                        cancellations: false,
-                        tax0: false,
-                        yearFilter: "show all years",
-                        add2ndhalf2023to2024: true
-                    });
+                    const settings = await getSettings();
 
                     let cancellations = await getValue('cancellations', []);
                     const filteredData = applyDisplayFilters(asinData, settings, cancellations);
@@ -1395,6 +3039,7 @@ GM_addStyle(`
                     downloadLink.download = 'exported_data.xlsx';
                     downloadLink.click();
                     URL.revokeObjectURL(xlsxUrl);
+                    updateStatusMessage(`Gefilterte XLSX exportiert (${asinData.length} Produkte).`, 'success');
                 });
 
 
@@ -1417,8 +3062,14 @@ GM_addStyle(`
                                     if (!confirm(`${records.length} Produkte aus dieser Datei importieren und gleichnamige lokale Produkte überschreiben?`)) {
                                       return;
                                     }
-                                    await db.keyValuePairs.bulkPut(records);
-                                    alert(`Database imported successfully (${records.length} products).`);
+                                    await Promise.all(records.map(record => (
+                                      enqueueProductOperation(
+                                        record.key.slice(5),
+                                        () => setValue(record.key, record.value)
+                                      )
+                                    )));
+                                    alert(`Produktdaten erfolgreich importiert (${records.length} Produkte).`);
+                                    await requestDashboardRefresh();
                                     await updateDefaultStatusSummary();
                                 } catch (error) {
                                     console.error('Error importing database:', error.message);
@@ -1432,13 +3083,6 @@ GM_addStyle(`
                 });
 
 
-                  const containerfordata = document.getElementById('vvp-tax-information-container');
-                const divdata = document.createElement('div');
-                divdata.innerHTML = `
-                <div id="data-table" style="margin-top: 20px;"></div>
-                `;
-                containerfordata.appendChild(divdata);
-
                   setTimeout(async () => {
                     try {
                       document.getElementById('load-xlsx-info').addEventListener('click', loadXLSXInfo);
@@ -1446,7 +3090,7 @@ GM_addStyle(`
                       document.getElementById('copy-pdf-list').addEventListener('click', copyPDFList);
 
                       setAutomaticSyncStep(2, 'Lokale Produktdaten werden geladen ...', 0);
-                      const list = await load_all_asin_etv_values_from_storage({
+                      let list = await load_all_asin_etv_values_from_storage({
                         automaticSyncStep: 2
                       });
 
@@ -1458,9 +3102,13 @@ GM_addStyle(`
                         console.error('Automatic account sync failed:', error);
                       }
 
-                      setAutomaticSyncStep(6, 'Jahresauswertung und Diagramme werden aufgebaut ...', 0);
-                      await createYearlyBreakdown(list);
-                      setAutomaticSyncStep(6, 'Lokale Auswertung wurde aufgebaut.', 1);
+                      // The estimator may have updated Teilwerte in IndexedDB. Re-read before rendering
+                      // so the first dashboard already reflects the response from this sync.
+                      list = await load_all_asin_etv_values_from_storage(false);
+                      setAutomaticSyncStep(6, 'Jahresauswertungen und aufklappbare Ansichten werden vorbereitet ...', 0);
+                      requestDashboardRefresh();
+                      await waitForDashboardRefreshIdle();
+                      setAutomaticSyncStep(6, 'Lokale Auswertungen sind bereit; Diagramme laden beim Aufklappen.', 1);
 
                       if (syncError) {
                         const message = `Lokale Auswertung bereit, aber der Server-Sync ist fehlgeschlagen: ${syncError.message}`;
@@ -1481,79 +3129,224 @@ GM_addStyle(`
                   }, 200);
               }
 
+  async function createLazyAnalysisSection(parentElement, options) {
+      const details = document.createElement('details');
+      details.className = 'vtt-disclosure vtt-analysis-section';
+      details.id = options.id;
+      details.open = Boolean(options.open);
+
+      const summary = document.createElement('summary');
+      const title = document.createElement('span');
+      title.textContent = options.title;
+      summary.appendChild(title);
+      details.appendChild(summary);
+
+      const content = document.createElement('div');
+      content.className = 'vtt-chart-content';
+      if (options.description) {
+          const description = document.createElement('p');
+          description.className = 'vtt-panel-description';
+          description.textContent = options.description;
+          content.appendChild(description);
+      }
+      details.appendChild(content);
+      parentElement.appendChild(details);
+
+      let renderPromise = null;
+      const renderOnce = () => {
+          if (typeof options.isCurrent === 'function' && !options.isCurrent()) {
+              details.dataset.renderState = 'stale';
+              return Promise.resolve({ stale: true });
+          }
+          if (renderPromise) {
+              renderPromise.then(() => {
+                  const plot = content.querySelector('.js-plotly-plot');
+                  if (plot && globalThis.Plotly?.Plots?.resize) Plotly.Plots.resize(plot);
+              }).catch(() => undefined);
+              return renderPromise;
+          }
+          details.dataset.renderState = 'loading';
+          const loading = document.createElement('div');
+          loading.className = 'vtt-empty-state';
+          loading.textContent = 'Ansicht wird geladen …';
+          content.appendChild(loading);
+          renderPromise = Promise.resolve()
+              .then(() => options.render(content))
+              .then(() => {
+                  loading.remove();
+                  if (typeof options.isCurrent === 'function' && !options.isCurrent()) {
+                      if (globalThis.Plotly?.purge) {
+                          content.querySelectorAll('.js-plotly-plot').forEach(plot => Plotly.purge(plot));
+                      }
+                      details.dataset.renderState = 'stale';
+                      return { stale: true };
+                  }
+                  details.dataset.renderState = 'ready';
+                  return { rendered: true };
+              })
+              .catch(error => {
+                  console.error(`Could not render ${options.title}:`, error);
+                  loading.textContent = `Diese Ansicht konnte nicht aufgebaut werden: ${error.message}`;
+                  details.dataset.renderState = 'error';
+                  throw error;
+              });
+          return renderPromise;
+      };
+
+      details.addEventListener('toggle', () => {
+          if (details.open) renderOnce().catch(() => undefined);
+      });
+      if (details.open) await renderOnce().catch(() => undefined);
+      return details;
+  }
+
   async function createYearlyBreakdown(list) {
+      const container = document.getElementById('vtt-analysis-content');
+      if (!container) return;
+      const renderRevision = ++analysisRenderRevision;
+      const isCurrent = () => (
+          renderRevision === analysisRenderRevision
+          && document.getElementById('vtt-analysis-content') === container
+      );
+      const nextContent = document.createDocumentFragment();
+      const settings = await getSettings();
+      if (!isCurrent()) return { stale: true };
       const sortedItems = list.map(item => ({
           ...item,
           date: new Date(item.date)
       })).sort((a, b) => a.date - b.date);
 
-      const years = [...new Set(sortedItems.map(item => item.date.getFullYear()))];
+      const yearSet = new Set(sortedItems.map(item => item.date.getFullYear()));
+      if (
+          settings.add2ndhalf2023to2024
+          && sortedItems.some(item => item.date.getFullYear() === 2023 && item.date.getMonth() >= 6)
+      ) {
+          yearSet.add(2024);
+      }
+      const years = [...yearSet]
+          .filter(year => {
+              if (settings.yearFilter === 'show current year') {
+                  return year === new Date().getFullYear();
+              }
+              if (settings.yearFilter === 'show all years') return true;
+              return settings.yearFilter === `only ${year}`;
+          })
+          .sort((a, b) => a - b);
 
-      const container = document.getElementById('vvp-tax-information-container');
-
-      for (const year of years) {
-
-        const settings = await getValue("settings", {
-            yearFilter: "show all years",
-            streuartikelregelung: true,
-            streuartikelregelungTeilwert: true,
-            add2ndhalf2023to2024: true
-        });
-
-        if (settings.yearFilter === "show current year" && year !== new Date().getFullYear()) {
-            continue;
-        }
-
-        if (settings.yearFilter !== "show all years" && settings.yearFilter !== "show current year" && settings.yearFilter !== `only ${year}`) {
-            continue;
-        }
-
-          const yearContainer = document.createElement('div');
-          yearContainer.id = `year-container-${year}`;
-          yearContainer.style.border = '1px solid #ccc';
-          yearContainer.style.padding = '10px';
-          yearContainer.style.marginBottom = '20px';
-
-          const title = document.createElement('h3');
-          title.textContent = `Year ${year}`;
-          yearContainer.appendChild(title);
-          container.appendChild(yearContainer);
-
-          let yearlyItems;
+      const yearEntries = years.map(year => {
+          let items;
           if (settings.add2ndhalf2023to2024) {
               if (year === 2023) {
-                  yearlyItems = sortedItems.filter(item => item.date.getFullYear() === year && item.date.getMonth() < 6);
+                  items = sortedItems.filter(item => (
+                      item.date.getFullYear() === 2023
+                      && item.date.getMonth() < 6
+                  ));
               } else if (year === 2024) {
-                  yearlyItems = sortedItems.filter(item => (item.date.getFullYear() === year) || (item.date.getFullYear() === 2023 && item.date.getMonth() >= 6));
+                  items = sortedItems.filter(item => (
+                      item.date.getFullYear() === 2024
+                      || (item.date.getFullYear() === 2023 && item.date.getMonth() >= 6)
+                  ));
               } else {
-                  yearlyItems = sortedItems.filter(item => item.date.getFullYear() === year);
+                  items = sortedItems.filter(item => item.date.getFullYear() === year);
               }
           } else {
-              yearlyItems = sortedItems.filter(item => item.date.getFullYear() === year);
+              items = sortedItems.filter(item => item.date.getFullYear() === year);
           }
-          await createPieChart(yearlyItems, yearContainer);
-          let target_date = new Date(year, 11, 31);
-          if (year === 2023 && settings.add2ndhalf2023to2024) {
-              target_date = new Date(year, 5, 30);
+          return { year, items };
+      }).filter(entry => entry.items.length > 0);
+
+      if (yearEntries.length === 0) {
+          const emptyState = document.createElement('div');
+          emptyState.className = 'vtt-empty-state';
+          emptyState.textContent = 'Für den gewählten Jahresfilter sind noch keine Produktdaten vorhanden.';
+          nextContent.appendChild(emptyState);
+          if (!isCurrent()) return { stale: true };
+          if (globalThis.Plotly?.purge) {
+              container.querySelectorAll('.js-plotly-plot').forEach(plot => Plotly.purge(plot));
           }
-          await createETVPlot(year, yearlyItems, target_date, yearContainer); // Assuming end of year for plot
-          await createCancellationRatioTable(yearlyItems, yearContainer);
-          await createTeilwertSummaryTable(yearlyItems, yearContainer);
+          container.replaceChildren(nextContent);
+          return { rendered: true };
       }
+
+      const latestVisibleYear = yearEntries[yearEntries.length - 1].year;
+      for (const { year, items: yearlyItems } of yearEntries) {
+          if (!isCurrent()) return { stale: true };
+          const yearContainer = document.createElement('details');
+          yearContainer.id = `year-container-${year}`;
+          yearContainer.className = 'vtt-disclosure vtt-year-card';
+          yearContainer.open = year === latestVisibleYear;
+
+          const yearSummary = document.createElement('summary');
+          const yearTitle = document.createElement('span');
+          yearTitle.textContent = `Steuerjahr ${year}`;
+          const yearMeta = document.createElement('span');
+          yearMeta.className = 'vtt-summary-meta';
+          yearMeta.textContent = `${yearlyItems.length.toLocaleString('de-DE')} ${yearlyItems.length === 1 ? 'Produkt' : 'Produkte'}`;
+          yearSummary.append(yearTitle, yearMeta);
+          yearContainer.appendChild(yearSummary);
+
+          const yearBody = document.createElement('div');
+          yearBody.className = 'vtt-disclosure-body';
+          yearContainer.appendChild(yearBody);
+          nextContent.appendChild(yearContainer);
+
+          const summaryOpen = year === latestVisibleYear;
+          await createLazyAnalysisSection(yearBody, {
+              id: `vtt-tax-summary-${year}`,
+              title: 'Teilwert- und EÜR-Zusammenfassung',
+              description: 'Berechnet Teilwerte und die EÜR-Werte mit den aktuell gespeicherten Auswertungsregeln.',
+              open: summaryOpen,
+              isCurrent,
+              render: target => createTeilwertSummaryTable(yearlyItems, target)
+          });
+          await createLazyAnalysisSection(yearBody, {
+              id: `vtt-product-distribution-${year}`,
+              title: 'Produktverteilung',
+              description: 'Zeigt Stornierungen, 0-€-ETV sowie vorhandene und fehlende Teilwerte.',
+              isCurrent,
+              render: target => createPieChart(yearlyItems, target)
+          });
+          let targetDate = new Date(year, 11, 31);
+          if (year === 2023 && settings.add2ndhalf2023to2024) {
+              targetDate = new Date(year, 5, 30);
+          }
+          await createLazyAnalysisSection(yearBody, {
+              id: `vtt-etv-plot-${year}`,
+              title: 'ETV- und Teilwertverlauf',
+              description: 'Kumulierte Entwicklung im Steuerjahr mit einer einfachen Hochrechnung bis zum Jahresende.',
+              isCurrent,
+              render: target => createETVPlot(year, yearlyItems, targetDate, target)
+          });
+          await createLazyAnalysisSection(yearBody, {
+              id: `vtt-cancellation-ratio-${year}`,
+              title: 'Stornoquote',
+              description: 'Vergleicht erkannte Stornierungen mit allen Bestellungen dieses Auswertungszeitraums.',
+              isCurrent,
+              render: target => createCancellationRatioTable(yearlyItems, target)
+          });
+      }
+      if (!isCurrent()) return { stale: true };
+      if (globalThis.Plotly?.purge) {
+          container.querySelectorAll('.js-plotly-plot').forEach(plot => Plotly.purge(plot));
+      }
+      container.replaceChildren(nextContent);
+      return { rendered: true };
   }
 
   async function createETVPlot(taxYear, items, endDate, parentElement) {
     const cancelledAsins = await getValue("cancellations", []);
-    const settings = await getValue("settings", {});
+    const settings = await getSettings();
     // Filter out items with etv === 0
     const filteredItems = items.filter(item => !cancelledAsins.includes(item.ASIN) && item.etv > 0);
 
     if (filteredItems.length === 0) {
-        console.log("No filtered items to plot.");
+        const emptyState = document.createElement('div');
+        emptyState.className = 'vtt-empty-state';
+        emptyState.textContent = 'Für diesen Zeitraum sind keine nicht stornierten Produkte mit positivem ETV vorhanden.';
+        parentElement.appendChild(emptyState);
         return;
     }
 
-    const width = 600, height = 400;
     const dataByDateMap = new Map();
     let currentEtv = 0;
     filteredItems.forEach(d => {
@@ -1569,16 +3362,20 @@ GM_addStyle(`
         y: dataByDate.map(d => d.etv),
         mode: 'lines',
         type: 'scatter',
-        name: 'Historical ETV',
+        name: 'Bisheriger ETV',
         line: { color: 'steelblue' }
     };
 
     const firstPoint = dataByDate[0];
     const lastPoint = dataByDate[dataByDate.length - 1];
-    const projectedEtv = lastPoint.etv + (lastPoint.etv - firstPoint.etv) * ((endDate - lastPoint.date) / (lastPoint.date - firstPoint.date));
+    const observedDuration = lastPoint.date - firstPoint.date;
+    const remainingDuration = Math.max(0, endDate - lastPoint.date);
+    const projectedEtv = observedDuration > 0
+      ? lastPoint.etv + (lastPoint.etv - firstPoint.etv) * (remainingDuration / observedDuration)
+      : lastPoint.etv;
 
     const projectionData = [
-        { date: firstPoint.date, etv: firstPoint.etv },
+        { date: lastPoint.date, etv: lastPoint.etv },
         { date: endDate, etv: projectedEtv }
     ];
 
@@ -1587,7 +3384,7 @@ GM_addStyle(`
         y: projectionData.map(d => d.etv),
         mode: 'lines',
         type: 'scatter',
-        name: 'Projected ETV',
+        name: 'ETV-Hochrechnung',
         line: { color: 'orange', dash: 'dash' }
     };
 
@@ -1606,7 +3403,7 @@ GM_addStyle(`
             }
             return use_teilwert / item.etv;
         });
-        const validRatios = teilwertEtvRatios.filter(ratio => !isNaN(ratio)); // Filter out NaN values
+        const validRatios = teilwertEtvRatios.filter(ratio => Number.isFinite(ratio));
         if (validRatios.length > 0) {
             const avgTeilwertEtvRatio = validRatios.reduce((sum, ratio) => sum + ratio, 0) / validRatios.length;
 
@@ -1626,7 +3423,7 @@ GM_addStyle(`
                     y: teilwertData.map(d => d.teilwert),
                     mode: 'lines',
                     type: 'scatter',
-                    name: 'Historical + Estimated Teilwert',
+                    name: 'Bisheriger + geschätzter Teilwert',
                     line: { color: 'green' }
                 };
                 data.push(teilwertTrace);
@@ -1635,15 +3432,17 @@ GM_addStyle(`
     }
 
     const layout = {
-        title: `ETV and Teilwert over Time`,
+        title: `ETV- und Teilwertverlauf ${taxYear}`,
+        autosize: true,
+        height: 380,
         xaxis: {
-            title: 'Date',
+            title: 'Datum',
             tickformat: '%b %d',
             range: [firstPoint.date, endDate],
             tickangle: -45
         },
         yaxis: {
-            title: 'Value',
+            title: 'Wert in Euro',
             autorange: true
         },
         margin: {
@@ -1652,21 +3451,26 @@ GM_addStyle(`
             b: 80,
             l: 60
         },
-        width: "80%",
-        height: "30%"
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: '#ffffff'
     };
 
     const containerId = `plot-container-${taxYear}`;
     const newDiv = document.createElement('div');
     newDiv.id = containerId;
+    newDiv.style.width = '100%';
+    newDiv.style.minHeight = '380px';
     parentElement.appendChild(newDiv);
 
-    Plotly.newPlot(containerId, data, layout);
+    await Plotly.newPlot(newDiv, data, layout, {
+      responsive: true,
+      displaylogo: false
+    });
 }
 
 async function createPieChart(list, parentElement) {
     const cancelledAsins = await getValue("cancellations", []);
-    const settings = await getValue("settings", {});
+    const settings = await getSettings();
 
     const counts = list.reduce((acc, item) => {
         let use_teilwert = getTeilwert(item, settings);
@@ -1683,10 +3487,10 @@ async function createPieChart(list, parentElement) {
     }, { cancellations: 0, tax0: 0, teilwertAvailable: 0, teilwertMissing: 0 });
 
     const data = [
-        { category: 'Cancellations', count: counts.cancellations },
-        { category: 'tax0', count: counts.tax0 },
-        { category: 'Teilwert Available', count: counts.teilwertAvailable },
-        { category: 'Teilwert Missing', count: counts.teilwertMissing }
+        { category: 'Stornierungen', count: counts.cancellations },
+        { category: 'ETV 0 €', count: counts.tax0 },
+        { category: 'Teilwert vorhanden', count: counts.teilwertAvailable },
+        { category: 'Teilwert fehlt', count: counts.teilwertMissing }
     ];
 
     const width = 600, height = 300, margin = 40;
@@ -1695,6 +3499,10 @@ async function createPieChart(list, parentElement) {
     const svg = d3.select(parentElement).append('svg')
         .attr('width', width)
         .attr('height', height)
+        .attr('viewBox', `0 0 ${width} ${height}`)
+        .attr('preserveAspectRatio', 'xMidYMid meet')
+        .attr('role', 'img')
+        .attr('aria-label', 'Verteilung der Produkte nach Stornierung, ETV und Teilwert')
         .append('g')
         .attr('transform', `translate(${width / 2}, ${height / 2})`);
 
@@ -1748,11 +3556,7 @@ async function createPieChart(list, parentElement) {
       const cancelledAsins = await getValue("cancellations", []);
       let filteredList = list.filter(item => !cancelledAsins.includes(item.ASIN));
 
-    const settings = await getValue("settings", {
-        streuartikelregelung: true,
-        streuartikelregelungTeilwert: true,
-        einnahmezumteilwert: true
-    });
+    const settings = await getSettings();
 
     if (settings.streuartikelregelung) {
         filteredList = filteredList.filter(item => item.etv > 11.90);
@@ -1798,9 +3602,9 @@ async function createPieChart(list, parentElement) {
 
                   const tbody = table.append('tbody');
                   const rows = [
-                      { label: 'Total Teilwert (Known)', value: totalTeilwert.toFixed(2) },
-                      { label: 'Estimated Teilwert (Missing)', value: estimatedTeilwert.toFixed(2) },
-                      { label: 'Overall Estimated Teilwert', value: overallTeilwert.toFixed(2) }
+                      { label: 'Bekannter Teilwert gesamt', value: totalTeilwert.toFixed(2) },
+                      { label: 'Geschätzter fehlender Teilwert', value: estimatedTeilwert.toFixed(2) },
+                      { label: 'Geschätzter Teilwert gesamt', value: overallTeilwert.toFixed(2) }
                   ];
                   rows.forEach(row => {
                       const tr = tbody.append('tr');
@@ -1930,13 +3734,22 @@ async function createPieChart(list, parentElement) {
                 d3.select(parentElement).append('div').html(euerTableStyles);
 
               } else {
-                  parentElement.append(document.createTextNode("Not enough data to reliably estimate total Teilwert."));
+                  const notice = document.createElement('div');
+                  notice.className = 'vtt-empty-state';
+                  notice.textContent = 'Die vorhandenen Teilwertdaten reichen noch nicht für eine verlässliche Gesamtschätzung.';
+                  parentElement.appendChild(notice);
               }
           } else {
-              parentElement.append(document.createTextNode("Not enough valid items with Teilwert to estimate."));
+              const notice = document.createElement('div');
+              notice.className = 'vtt-empty-state';
+              notice.textContent = 'Es sind noch nicht genügend gültige Teilwerte für eine Schätzung vorhanden.';
+              parentElement.appendChild(notice);
           }
       } else {
-          parentElement.append(document.createTextNode("Not enough items with Teilwert to estimate."));
+          const notice = document.createElement('div');
+          notice.className = 'vtt-empty-state';
+          notice.textContent = `Für eine belastbare Schätzung werden mindestens 10 Produkte mit Teilwert benötigt; aktuell sind es ${itemsWithTeilwert.length}.`;
+          parentElement.appendChild(notice);
       }
   }
 
@@ -2088,12 +3901,11 @@ async function createPieChart(list, parentElement) {
                   for (const [rawAsin, value] of Object.entries(data)) {
                       const asin = normalizeAsin(rawAsin);
                       if (!asin || !value || typeof value !== 'object' || Array.isArray(value)) continue;
-                      const key = `ASIN_${asin}`;
-                      const existingData = await getValue(key);
-                      const updatedData = existingData
-                        ? { ...parseStoredProduct(existingData, `local product ${asin}`), ...value }
-                        : value;
-                      await setValue(key, JSON.stringify(updatedData));
+                      const updatedData = await updateStoredProduct(
+                        asin,
+                        current => ({ ...current, ...value }),
+                        { createIfMissing: true }
+                      );
                       products.push({ ...updatedData, ASIN: asin });
                   }
                   if (sync) {
@@ -2126,18 +3938,22 @@ async function createPieChart(list, parentElement) {
                         1,
                         "success"
                       );
-                  } catch (error) {
-                      console.error('Error loading XLSX info:', error);
-                      setAutomaticSyncStep(
+                   } catch (error) {
+                       console.error('Error loading XLSX info:', error);
+                       setAutomaticSyncStep(
                         7,
                         error.localDataSaved
                           ? `XLSX lokal gespeichert, aber Synchronisierung fehlgeschlagen: ${error.message}`
                           : 'Fehler beim Laden der XLSX-Informationen.',
                         1,
-                        "error"
-                      );
-                  }
-              }
+                         "error"
+                       );
+                   } finally {
+                       requestDashboardRefresh().catch(refreshError => {
+                         console.error('Could not refresh the dashboard after XLSX import:', refreshError);
+                       });
+                   }
+               }
 
                 async function loadOrdersInfo() {
                     try {
@@ -2170,6 +3986,10 @@ async function createPieChart(list, parentElement) {
                           1,
                           "error"
                         );
+                    } finally {
+                        requestDashboardRefresh().catch(refreshError => {
+                          console.error('Could not refresh the dashboard after order import:', refreshError);
+                        });
                     }
                 }
 
@@ -2180,6 +4000,7 @@ async function createPieChart(list, parentElement) {
             return;
         }
       const progressBar = createSimpleProgressBar(container.parentNode);
+      progressBarController = progressBar;
       window.progressBar = progressBar;
       const div = document.createElement('div');
       div.innerHTML = `
@@ -2201,13 +4022,8 @@ async function createPieChart(list, parentElement) {
   }
 
   async function copyPDFList() {
-        const asinData = await load_all_asin_etv_values_from_storage();
-        const settings = await getValue("settings", {
-            cancellations: false,
-            tax0: false,
-            yearFilter: "show all years",
-            add2ndhalf2023to2024: true
-        });
+        const asinData = await load_all_asin_etv_values_from_storage(false);
+        const settings = await getSettings();
         const cancellations = await getValue('cancellations', []);
         const filteredData = applyDisplayFilters(asinData, settings, cancellations);
         const pdfList = filteredData
@@ -2223,47 +4039,83 @@ async function createPieChart(list, parentElement) {
         const pdfListText = pdfList.join('\n');
         GM_setClipboard(pdfListText);
         alert(`PDF-Liste kopiert (${pdfList.length} Links).`);
+        updateStatusMessage(`PDF-Linkliste kopiert (${pdfList.length} Links).`, 'success');
   }
 
-  async function showAllData() {
+  function destroyExistingAsinDataTable() {
+      if (
+          typeof $ === 'function'
+          && $.fn?.DataTable
+          && typeof $.fn.DataTable.isDataTable === 'function'
+          && $.fn.DataTable.isDataTable('#asin-table')
+      ) {
+          $('#asin-table').DataTable().destroy();
+      }
+  }
+
+  function adjustExistingAsinDataTable() {
+      if (
+          typeof $ === 'function'
+          && $.fn?.DataTable
+          && typeof $.fn.DataTable.isDataTable === 'function'
+          && $.fn.DataTable.isDataTable('#asin-table')
+      ) {
+          $('#asin-table').DataTable().columns.adjust().draw(false);
+      }
+  }
+
+  async function showAllData(options = {}) {
     installTeilwertOutsideClickHandler();
 
       const dataTableDiv = document.getElementById('data-table');
       if (!dataTableDiv) return;
-      dataTableDiv.innerHTML = '<p>Loading data...</p>';
+      const renderRevision = ++tableRenderRevision;
+      const isCurrent = () => (
+        renderRevision === tableRenderRevision
+        && document.getElementById('data-table') === dataTableDiv
+      );
+      if (options.openSection !== false) {
+          const dataSection = document.getElementById('vtt-data-section');
+          if (dataSection) dataSection.open = true;
+      }
+      const hadRenderedTable = dataTableDiv.dataset.rendered === 'true';
+      dataTableDiv.dataset.rendered = 'true';
+      dataTableDiv.setAttribute('aria-busy', 'true');
+      if (!hadRenderedTable) {
+          dataTableDiv.innerHTML = '<div class="vtt-empty-state">Produktdaten werden geladen …</div>';
+      }
 
       try {
-          let asinData = await load_all_asin_etv_values_from_storage(false);
-
-        const settings = await getValue("settings", {
-            cancellations: false,
-            tax0: false,
-            yearFilter: "show all years",
-            add2ndhalf2023to2024: true
-        });
+          const allAsinData = Array.isArray(options.sourceData)
+            ? options.sourceData
+            : await load_all_asin_etv_values_from_storage(false);
+          if (!isCurrent()) return { stale: true };
+          const settings = await getSettings();
+          if (!isCurrent()) return { stale: true };
 
         let cancellations = await getValue('cancellations', []);
-        const filteredData = applyDisplayFilters(asinData, settings, cancellations);
-
-        asinData = filteredData;
+        if (!isCurrent()) return { stale: true };
+        const asinData = applyDisplayFilters(allAsinData, settings, cancellations);
 
           if (asinData.length === 0) {
-              dataTableDiv.innerHTML = '<p>No data found.</p>';
-              return;
+              destroyExistingAsinDataTable();
+              renderTableFilterSummary(settings, allAsinData.length, asinData.length);
+              dataTableDiv.innerHTML = '<div class="vtt-empty-state">Mit diesen Tabellenfiltern wurden keine Produkte gefunden.</div>';
+              return { rendered: true };
           }
 
           let table = `<table id="asin-table" class="display" cellspacing="0" cellpadding="5">
                           <thead>
                               <tr>
                                   <th>ASIN</th>
-                                  <th>Date</th>
-                                  <th>Name</th>
+                                  <th>Datum</th>
+                                  <th>Produkt</th>
                                   <th>ETV</th>
                                   <th>Keepa</th>
                                   <th>Teilwert</th>
-                                  <th>PDF Report</th>
-                                  <th>Product Link</th>
-                                  <th>Review Link</th>
+                                  <th>PDF-Nachweis</th>
+                                  <th>Amazon</th>
+                                  <th>Rezension</th>
                               </tr>
                           </thead>
                           <tbody>`;
@@ -2287,27 +4139,36 @@ async function createPieChart(list, parentElement) {
                           <td>${escapeHtml(item.etv)}</td>
                           <td>${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${asin}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.keepa)}</a>` : 'N/A'}</td>
                           <td id="teilwert_for_asin_${asin}" data-order="${escapeHtml(getTeilwert(item, settings) ?? 0)}">
-                              <a href="javascript:void(0);">
+                              <button type="button" class="vtt-table-link" aria-label="Teilwert für ${asin} bearbeiten">
                                   ${teilwertDisplay}
-                              </a>
+                              </button>
                           </td>
-                          <td>${pdfLink ? `<a href="${escapeHtml(pdfLink)}" target="_blank" rel="noopener noreferrer">PDF Link</a>` : 'N/A'}</td>
-                          <td><a href="https://www.amazon.de/dp/${asin}" target="_blank" rel="noopener noreferrer">Product Link</a></td>
-                          <td><a href="https://www.amazon.de/review/create-review?encoding=UTF&amp;asin=${asin}" target="_blank" rel="noopener noreferrer">Review Link</a></td>
+                          <td>${pdfLink ? `<a href="${escapeHtml(pdfLink)}" target="_blank" rel="noopener noreferrer">PDF öffnen</a>` : 'N/A'}</td>
+                          <td><a href="https://www.amazon.de/dp/${asin}" target="_blank" rel="noopener noreferrer">Produkt öffnen</a></td>
+                          <td><a href="https://www.amazon.de/review/create-review?encoding=UTF&amp;asin=${asin}" target="_blank" rel="noopener noreferrer">Rezension öffnen</a></td>
                       </tr>`;
           });
 
           table += `</tbody>
                   </table>`;
 
+          if (!isCurrent()) return { stale: true };
+          destroyExistingAsinDataTable();
+          renderTableFilterSummary(settings, allAsinData.length, asinData.length);
           dataTableDiv.innerHTML = table;
-            $(document).ready(function() {
-               $('#asin-table').DataTable({
-                   lengthMenu: [10, 25, 50, 100, 1000000]
-               });
-            });
-
-        window.progressBar.hide();
+          if (typeof $ === 'function' && $.fn?.DataTable) {
+              $('#asin-table').DataTable({
+                  lengthMenu: [10, 25, 50, 100, 1000000],
+                  language: {
+                      search: 'Tabelle durchsuchen:',
+                      lengthMenu: '_MENU_ Einträge pro Seite',
+                      info: '_START_–_END_ von _TOTAL_ Produkten',
+                      infoEmpty: 'Keine Produkte',
+                      zeroRecords: 'Keine passenden Produkte gefunden',
+                      paginate: { previous: 'Zurück', next: 'Weiter' }
+                  }
+              });
+          }
 
 
         async function showTeilwertPopup(item) {
@@ -2318,7 +4179,7 @@ async function createPieChart(list, parentElement) {
             }
 
             const asin = item.ASIN;
-            const settings = await getValue("settings", {});
+            const settings = await getSettings();
             const pdfLink = getSafeHttpUrl(getPDFLink(item, settings));
 
             const overlay = document.createElement('div');
@@ -2370,35 +4231,38 @@ async function createPieChart(list, parentElement) {
                 overlay.appendChild(checkboxElement);
 
                 document.getElementById(checkbox.id).addEventListener('change', async (event) => {
-                    const updatedItem = parseStoredProduct(
-                      await getValue(`ASIN_${asin}`),
-                      `local product ${asin}`
-                    );
-                    updatedItem[checkbox.id] = event.target.checked;
-                    await setValue(
-                      `ASIN_${asin}`,
-                      JSON.stringify(parseStoredProduct(updatedItem, `local product ${asin}`))
-                    );
+                    const checked = event.target.checked;
+                    await updateStoredProduct(asin, current => {
+                      current[checkbox.id] = checked;
+                    });
+                    await requestDashboardRefresh();
                 });
             });
 
             document.getElementById('angepasster-teilwert').addEventListener('change', async (event) => {
                 const input = event.target.value.trim().replace(',', '.');
-                const updatedItem = parseStoredProduct(await getValue(`ASIN_${asin}`), `local product ${asin}`);
                 if (input === '') {
-                    updatedItem.myteilwert = null;
-                    updatedItem.myTeilwert = null;
-                    await setValue(`ASIN_${asin}`, JSON.stringify(updatedItem));
+                    await updateStoredProduct(asin, current => {
+                      current.myteilwert = null;
+                      current.myTeilwert = null;
+                    });
+                    await requestDashboardRefresh();
                     return;
                 }
                 const value = Number(input);
                 if (Number.isFinite(value) && value >= 0) {
-                    updatedItem.myteilwert = value;
-                    updatedItem.myTeilwert = value;
-                    await setValue(`ASIN_${asin}`, JSON.stringify(updatedItem));
+                    await updateStoredProduct(asin, current => {
+                      current.myteilwert = value;
+                      current.myTeilwert = value;
+                    });
+                    await requestDashboardRefresh();
                 } else {
                     alert('Bitte einen gültigen, nicht negativen Teilwert eingeben.');
-                    event.target.value = updatedItem.myteilwert ?? '';
+                    const latest = parseStoredProduct(
+                      await getValue(`ASIN_${asin}`),
+                      `local product ${asin}`
+                    );
+                    event.target.value = latest.myteilwert ?? '';
                 }
             });
 
@@ -2412,7 +4276,14 @@ async function createPieChart(list, parentElement) {
         });
 
       } catch (error) {
-          dataTableDiv.textContent = `Error loading data: ${error.message}`;
+          if (isCurrent()) {
+              if (!hadRenderedTable) {
+                  dataTableDiv.textContent = `Produktdaten konnten nicht geladen werden: ${error.message}`;
+              }
+              updateStatusMessage(`Produktdatentabelle konnte nicht aktualisiert werden: ${error.message}`, 'error');
+          }
+      } finally {
+          if (isCurrent()) dataTableDiv.removeAttribute('aria-busy');
       }
   }
 
@@ -2454,7 +4325,7 @@ async function createPieChart(list, parentElement) {
       const thead = table.append('thead');
       thead.append('tr')
           .selectAll('th')
-          .data(['Year', 'Orders', 'Cancellations', 'Cancellation Ratio'])
+          .data(['Jahr', 'Bestellungen', 'Stornierungen', 'Stornoquote'])
           .enter()
           .append('th')
           .text(d => d);
@@ -2502,21 +4373,34 @@ async function createPieChart(list, parentElement) {
                   Object.assign(globalThis.__VINE_TAX_TOOLS_TEST_HOOK__, {
                       PrivateBackendHandler,
                       backendHandler,
+                      buildYearFilterOptionsHtml,
                       calculateEuerValues,
+                      createUI_taxextractor,
                       escapeHtml,
                       etvstrtofloat,
                       extractData,
+                      formatByteSize,
+                      getBackendUiModel,
+                      getEvaluationRuleLabels,
+                      getLocalProductDatabaseStats,
                       getPrivateBackendUrl,
+                      getSettings,
+                      getTableFilterLabels,
                       getTeilwert,
+                      getUtf8ByteLength,
                       gmRequest,
                       isValidBackendName,
                       normalizeAsin,
+                      normalizeSettings,
                       parseDateSafe,
                       parseStoredProduct,
                       postJson,
+                      refreshDashboardStatusCards,
                       saveData,
                       setAutomaticSyncStep,
                       setValue,
+                      showAllData,
+                      updateStoredProduct,
                       getValue,
                       validateDatabaseImport
                   });

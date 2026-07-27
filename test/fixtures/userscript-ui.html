@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VineTaxTools UI fixture</title>
+  <style>
+    body {
+      margin: 0;
+      color: #0f1111;
+      background: #eaeded;
+      font-family: Arial, sans-serif;
+    }
+
+    .fixture-page {
+      width: min(1180px, calc(100% - 32px));
+      margin: 28px auto;
+      border-radius: 8px;
+      padding: 22px;
+      background: #ffffff;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, .08);
+    }
+
+    .fixture-amazon-heading {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+
+    .fixture-amazon-copy {
+      margin: 0 0 12px;
+      color: #565959;
+      font-size: 13px;
+    }
+  </style>
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css">
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="https://d3js.org/d3.v5.min.js"></script>
+  <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
+  <script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
+</head>
+<body>
+  <main class="fixture-page">
+    <h1 class="fixture-amazon-heading">Vine-Steuerinformationen</h1>
+    <p class="fixture-amazon-copy">Lokale Testumgebung mit Amazon-ähnlichem Inhaltsbereich.</p>
+    <section id="vvp-tax-information-container"></section>
+  </main>
+
+  <script>
+    window.module = { exports: {} };
+    window.__VINE_TAX_TOOLS_TEST_HOOK__ = {};
+    window.__fixtureErrors = [];
+    window.addEventListener('error', event => {
+      window.__fixtureErrors.push(event.message || String(event.error || 'Unknown page error'));
+    });
+    window.addEventListener('unhandledrejection', event => {
+      window.__fixtureErrors.push(String(event.reason?.message || event.reason || 'Unhandled promise rejection'));
+    });
+
+    const fixtureProducts = [
+      ['ASIN_B000000001', { ASIN: 'B000000001', name: 'Kaffeemühle', date: '2023-05-12T00:00:00.000Z', etv: 39.99, teilwert: 13.5 }],
+      ['ASIN_B000000002', { ASIN: 'B000000002', name: 'USB-C-Ladegerät', date: '2023-09-22T00:00:00.000Z', etv: 18.49, teilwert: 7.1 }],
+      ['ASIN_B000000003', { ASIN: 'B000000003', name: 'Aufbewahrungsbox', date: '2024-02-04T00:00:00.000Z', etv: 0, teilwert: 0 }],
+      ['ASIN_B000000004', { ASIN: 'B000000004', name: 'Schreibtischlampe', date: '2024-06-17T00:00:00.000Z', etv: 29.9, teilwert: 10.2 }],
+      ['ASIN_B000000005', { ASIN: 'B000000005', name: 'Gartenhandschuhe', date: '2025-03-02T00:00:00.000Z', etv: 12.99, teilwert_v2: 4.8 }],
+      ['ASIN_B000000006', { ASIN: 'B000000006', name: 'Thermobecher', date: '2025-07-11T00:00:00.000Z', etv: 24.95, teilwert_v2: 8.6 }]
+    ];
+
+    class FixtureTable {
+      constructor() {
+        this.records = new Map(
+          fixtureProducts.map(([key, value]) => [key, { key, value: JSON.stringify(value) }])
+        );
+        this.records.set('settings', {
+          key: 'settings',
+          value: {
+            cancellations: false,
+            tax0: false,
+            yearFilter: 'show all years',
+            streuartikelregelung: true,
+            streuartikelregelungTeilwert: true,
+            add2ndhalf2023to2024: true,
+            einnahmezumteilwert: true,
+            useTeilwertV2: false
+          }
+        });
+        this.records.set('cancellations', { key: 'cancellations', value: ['B000000004'] });
+      }
+
+      async put(record) {
+        this.records.set(record.key, { ...record });
+      }
+
+      async bulkPut(records) {
+        for (const record of records) await this.put(record);
+      }
+
+      async get(key) {
+        return this.records.get(key);
+      }
+
+      async delete(key) {
+        this.records.delete(key);
+      }
+
+      async toArray() {
+        return Array.from(this.records.values());
+      }
+
+      toCollection() {
+        return {
+          primaryKeys: async () => Array.from(this.records.keys())
+        };
+      }
+    }
+
+    class FixtureDexie {
+      constructor() {
+        this.keyValuePairs = new FixtureTable();
+      }
+
+      version() {
+        return { stores: () => this };
+      }
+    }
+
+    window.Dexie = FixtureDexie;
+    window.GM_addStyle = css => {
+      const style = document.createElement('style');
+      style.textContent = css.replace(/@import[^;]+;/g, '');
+      document.head.appendChild(style);
+    };
+    window.GM_setClipboard = text => {
+      window.__fixtureClipboard = text;
+    };
+    window.GM_xmlhttpRequest = options => {
+      setTimeout(() => options.onload({
+        status: 200,
+        responseText: JSON.stringify({ status: 'success', existing_asins: [] })
+      }), 20);
+    };
+    window.GM_setValue = () => {};
+    window.GM_getValue = () => null;
+    window.GM_deleteValue = () => {};
+    window.GM_listValues = () => [];
+    window.alert = message => console.info('[fixture alert]', message);
+    window.confirm = () => false;
+    window.Plotly = {
+      Plots: { resize() {} },
+      purge(target) {
+        target.classList.remove('js-plotly-plot');
+        target.replaceChildren();
+      },
+      async newPlot(target, data, layout) {
+        target.classList.add('js-plotly-plot');
+        target.innerHTML = `
+          <div style="height:340px;display:grid;place-items:center;border:1px dashed #93b4e5;border-radius:10px;background:#f8fbff;color:#315d99;">
+            Plotly-Vorschau: ${layout.title} · ${data.length} Datenreihe(n)
+          </div>
+        `;
+      }
+    };
+  </script>
+  <script src="../../main_order_tax_cancellations_eval.user.js"></script>
+  <script>
+    (async () => {
+      while (typeof window.__VINE_TAX_TOOLS_TEST_HOOK__.createUI_taxextractor !== 'function') {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      await window.__VINE_TAX_TOOLS_TEST_HOOK__.createUI_taxextractor();
+      const readyDeadline = Date.now() + 5000;
+      while (true) {
+        const progress = document.getElementById('simpleProgressBarContainer');
+        if (progress && ['success', 'error'].includes(progress.dataset.state)) break;
+        if (Date.now() > readyDeadline) {
+          throw new Error('VineTaxTools fixture initialization timed out.');
+        }
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      window.__VTT_FIXTURE_READY__ = true;
+    })();
+  </script>
+</body>
+</html>

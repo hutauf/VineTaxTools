@@ -6,6 +6,8 @@ const vm = require('node:vm');
 
 const userscriptPath = path.join(__dirname, '..', 'main_order_tax_cancellations_eval.user.js');
 const userscriptSource = fs.readFileSync(userscriptPath, 'utf8');
+const uiFixturePath = path.join(__dirname, 'fixtures', 'userscript-ui.html');
+const uiFixtureSource = fs.readFileSync(uiFixturePath, 'utf8');
 
 class FakeTable {
   constructor() {
@@ -86,6 +88,7 @@ async function loadUserscript() {
 
 test('the userscript has a single Promise-based GM request gateway', () => {
   assert.strictEqual((userscriptSource.match(/GM_xmlhttpRequest\s*\(/g) || []).length, 1);
+  assert.strictEqual((userscriptSource.match(/^\/\/ @require /gm) || []).length, 7);
   assert.doesNotMatch(userscriptSource, /console\.log\(\s*['"`]POST /);
   assert.doesNotMatch(userscriptSource, /setFillWidth\(i\s*\*\s*10\)/);
 });
@@ -334,6 +337,32 @@ test('public estimator and private v1 DTOs retain their existing shapes', async 
   assert.strictEqual(privateValue.usageStatus.includes('verkauft'), true);
 });
 
+test('incomplete tax0 products keep polling the estimator for later results', async () => {
+  const { api, context } = await loadUserscript();
+  const handler = new api.PrivateBackendHandler();
+  const product = {
+    ASIN: 'B012345678',
+    name: 'Tax-0 product still processing',
+    etv: 0,
+    pdf: null,
+    teilwert_v2: null
+  };
+  await api.setValue('last_full_sync', Date.now());
+
+  let estimatorRequests = 0;
+  context.GM_xmlhttpRequest = options => {
+    estimatorRequests++;
+    options.onload({
+      status: 200,
+      responseText: JSON.stringify({ status: 'success' })
+    });
+  };
+
+  await handler.syncProducts([product]);
+  await handler.syncProducts([product]);
+  assert.strictEqual(estimatorRequests, 2);
+});
+
 test('stored product compatibility mirrors manual value and usage fields in both directions', async () => {
   const { api } = await loadUserscript();
 
@@ -369,22 +398,216 @@ test('stored product compatibility mirrors manual value and usage fields in both
   );
 });
 
+test('per-ASIN product updates serialize read-modify-write operations', async () => {
+  const { api } = await loadUserscript();
+  await api.setValue('ASIN_B000000001', JSON.stringify({
+    name: 'Concurrent product',
+    etv: 12,
+    verkauft: false,
+    lager: false
+  }));
+
+  let releaseFirst;
+  let markFirstStarted;
+  const firstGate = new Promise(resolve => {
+    releaseFirst = resolve;
+  });
+  const firstStarted = new Promise(resolve => {
+    markFirstStarted = resolve;
+  });
+  const firstUpdate = api.updateStoredProduct('B000000001', async current => {
+    markFirstStarted();
+    await firstGate;
+    current.verkauft = true;
+  });
+  await firstStarted;
+  const secondUpdate = api.updateStoredProduct('B000000001', current => {
+    current.lager = true;
+  });
+  releaseFirst();
+  await Promise.all([firstUpdate, secondUpdate]);
+
+  const stored = JSON.parse(await api.getValue('ASIN_B000000001'));
+  assert.strictEqual(stored.verkauft, true);
+  assert.strictEqual(stored.lager, true);
+});
+
+test('UI settings keep backwards-compatible defaults for older partial records', async () => {
+  const { api } = await loadUserscript();
+  const settings = api.normalizeSettings({ tax0: true, yearFilter: 'only 2025' });
+
+  assert.strictEqual(settings.tax0, true);
+  assert.strictEqual(settings.yearFilter, 'only 2025');
+  assert.strictEqual(settings.cancellations, false);
+  assert.strictEqual(settings.streuartikelregelung, false);
+  assert.strictEqual(settings.streuartikelregelungTeilwert, false);
+  assert.strictEqual(settings.add2ndhalf2023to2024, false);
+  assert.strictEqual(settings.einnahmezumteilwert, false);
+  assert.strictEqual(settings.useTeilwertV2, false);
+
+  const firstRunDefaults = api.normalizeSettings(null);
+  assert.strictEqual(firstRunDefaults.streuartikelregelung, true);
+  assert.strictEqual(firstRunDefaults.add2ndhalf2023to2024, true);
+
+  const legacyYearOptions = api.buildYearFilterOptionsHtml(
+    api.normalizeSettings({ yearFilter: 'only 2022' })
+  );
+  assert.match(legacyYearOptions, /value="only 2022" selected/);
+  assert.doesNotMatch(legacyYearOptions, /value="show all years" selected/);
+});
+
+test('local product size is UTF-8 aware and excludes token/configuration records', async () => {
+  const { api } = await loadUserscript();
+  assert.strictEqual(api.getUtf8ByteLength('abc'), 3);
+  assert.strictEqual(api.getUtf8ByteLength('ä'), 2);
+  assert.strictEqual(api.getUtf8ByteLength('😀'), 4);
+  assert.strictEqual(api.formatByteSize(0), '0 B');
+  assert.strictEqual(api.formatByteSize(1024), '1.0 KB');
+  assert.strictEqual(api.formatByteSize(1024 ** 2), '1.00 MB');
+
+  const firstValue = JSON.stringify({ name: 'Küchenhelfer', etv: 12.5 });
+  const secondValue = JSON.stringify({ name: '😀', etv: 0 });
+  await api.setValue('ASIN_B000000001', firstValue);
+  await api.setValue('ASIN_B000000002', secondValue);
+  await api.setValue('token', 'must-never-count-or-render');
+  const stats = await api.getLocalProductDatabaseStats();
+
+  assert.strictEqual(stats.productCount, 2);
+  assert.strictEqual(
+    stats.bytes,
+    api.getUtf8ByteLength('ASIN_B000000001')
+      + api.getUtf8ByteLength(firstValue)
+      + api.getUtf8ByteLength('ASIN_B000000002')
+      + api.getUtf8ByteLength(secondValue)
+  );
+  assert.strictEqual(JSON.stringify(stats).includes('must-never-count-or-render'), false);
+});
+
+test('backend UI model distinguishes local-only, configured and invalid states without exposing tokens', async () => {
+  const { api } = await loadUserscript();
+  const localOnly = api.getBackendUiModel('', 'hutaufvine');
+  const configured = api.getBackendUiModel('super-secret', 'hutaufvine');
+  const invalid = api.getBackendUiModel('super-secret', 'invalid/backend');
+
+  assert.strictEqual(localOnly.state, 'local-only');
+  assert.strictEqual(localOnly.configured, false);
+  assert.strictEqual(configured.state, 'configured');
+  assert.strictEqual(configured.configured, true);
+  assert.strictEqual(invalid.state, 'invalid');
+  assert.strictEqual(invalid.configured, false);
+  assert.strictEqual(JSON.stringify({ localOnly, configured, invalid }).includes('super-secret'), false);
+
+  await api.setValue('token', '   ');
+  assert.strictEqual(await new api.PrivateBackendHandler().getPrivateConfig(), null);
+});
+
+test('table filters and evaluation rules are described separately', async () => {
+  const { api } = await loadUserscript();
+  const settings = api.normalizeSettings({
+    cancellations: true,
+    tax0: false,
+    yearFilter: 'only 2024',
+    add2ndhalf2023to2024: true,
+    useTeilwertV2: true,
+    streuartikelregelung: false
+  });
+  const tableLabels = Array.from(api.getTableFilterLabels(settings));
+  const evaluationLabels = Array.from(api.getEvaluationRuleLabels(settings));
+
+  assert.deepStrictEqual(tableLabels, [
+    'Steuerjahr: 2024 inkl. 2. HJ 2023',
+    'Stornierungen: enthalten',
+    '0-€-ETV: ausgeblendet',
+    'Teilwert: V2'
+  ]);
+  assert.match(evaluationLabels.join(' · '), /Streuartikelregel nach ETV aus/);
+  assert.match(evaluationLabels.join(' · '), /2\. HJ 2023 wird 2024 zugerechnet/);
+});
+
+test('account UI is one shell with dialogs, status cards, filtered table and lazy analyses', () => {
+  const accountUi = userscriptSource.slice(
+    userscriptSource.indexOf('async function createUI_taxextractor'),
+    userscriptSource.indexOf('async function createLazyAnalysisSection')
+  );
+  const yearlyUi = userscriptSource.slice(
+    userscriptSource.indexOf('async function createLazyAnalysisSection'),
+    userscriptSource.indexOf('async function createETVPlot')
+  );
+
+  assert.match(accountUi, /id="vine-data-extractor" class="vtt-shell"/);
+  assert.match(accountUi, /id="vtt-settings-dialog"/);
+  assert.match(accountUi, /id="vtt-backend-dialog"/);
+  assert.match(accountUi, /id="vtt-data-dialog"/);
+  assert.match(accountUi, /id="vtt-storage-value"/);
+  assert.match(accountUi, /id="vtt-backend-summary"/);
+  assert.match(accountUi, /id="vtt-local-only-warning"/);
+  assert.match(accountUi, /id="vtt-analysis-content"/);
+  assert.match(accountUi, /id="vtt-table-filter-summary"/);
+  assert.match(accountUi, /\$\{VINE_PRODUCT_MANAGER_URL\}/);
+  assert.match(userscriptSource, /https:\/\/hutauf\.github\.io\/vine-produkt-manager\//);
+  assert.match(userscriptSource, /class="vtt-danger-zone"/);
+  assert.doesNotMatch(accountUi, /const settingsDiv/);
+  assert.doesNotMatch(accountUi, /prompt\('Enter token/);
+
+  assert.match(yearlyUi, /const renderRevision = \+\+analysisRenderRevision/);
+  assert.match(yearlyUi, /document\.createDocumentFragment\(\)/);
+  assert.match(yearlyUi, /container\.replaceChildren\(nextContent\)/);
+  assert.match(yearlyUi, /\.filter\(entry => entry\.items\.length > 0\)/);
+  assert.match(yearlyUi, /yearSet\.add\(2024\)/);
+  assert.match(yearlyUi, /createLazyAnalysisSection\(yearBody/);
+  assert.match(yearlyUi, /render: target => createETVPlot/);
+  assert.match(yearlyUi, /render: target => createPieChart/);
+});
+
+test('local UI fixture loads the production userscript and waits for initialization to finish', () => {
+  assert.match(uiFixtureSource, /src="\.\.\/\.\.\/main_order_tax_cancellations_eval\.user\.js"/);
+  assert.match(uiFixtureSource, /https:\/\/d3js\.org\/d3\.v5\.min\.js/);
+  assert.match(uiFixtureSource, /jquery\.dataTables\.min\.js/);
+  assert.match(uiFixtureSource, /\['success', 'error'\]\.includes\(progress\.dataset\.state\)/);
+  assert.match(uiFixtureSource, /window\.__VTT_FIXTURE_READY__ = true/);
+});
+
+test('setting changes refresh an open table and destroy DataTables before rebuilding it', () => {
+  assert.match(userscriptSource, /persistSettingAndRefresh\(settingId, event\.target\.checked\)/);
+  assert.match(userscriptSource, /dataTable\?\.dataset\.rendered === 'true'/);
+  assert.match(userscriptSource, /showAllData\(\{ openSection: false, sourceData: list \}\)/);
+  assert.match(
+    userscriptSource,
+    /dataTable\?\.dataset\.rendered !== 'true'[\s\S]*showAllData\(\{ openSection: false \}\)/
+  );
+
+  const tableRenderer = userscriptSource.slice(
+    userscriptSource.indexOf('function destroyExistingAsinDataTable'),
+    userscriptSource.indexOf('async function showTeilwertPopup')
+  );
+  assert.match(tableRenderer, /const renderRevision = \+\+tableRenderRevision/);
+  assert.match(tableRenderer, /if \(!isCurrent\(\)\) return \{ stale: true \}/);
+  assert.match(tableRenderer, /destroyExistingAsinDataTable\(\);\s+renderTableFilterSummary/);
+  assert.doesNotMatch(tableRenderer, /window\.progressBar\.hide\(\)/);
+  assert.doesNotMatch(tableRenderer, /\$\(document\)\.ready/);
+});
+
 test('account startup sync and orders autoload are explicit while the storage loader stays read-only', () => {
   const accountStart = userscriptSource.slice(
     userscriptSource.indexOf('async function createUI_taxextractor'),
     userscriptSource.indexOf('async function createYearlyBreakdown')
   );
+  const progressCreatedAt = accountStart.indexOf('createSimpleProgressBar(container, true)');
+  const settingsReadAt = accountStart.indexOf('const settings = await getSettings()');
   const progressAttachedAt = accountStart.indexOf("progressSlot.appendChild(progressBar.element)");
   const localLoadAt = accountStart.indexOf('await load_all_asin_etv_values_from_storage');
   const syncAt = accountStart.indexOf('await backendHandler.syncProducts(list)');
-  const yearlyBreakdownAt = accountStart.indexOf('await createYearlyBreakdown(list)');
+  const yearlyBreakdownAt = accountStart.indexOf('requestDashboardRefresh()', syncAt);
   const completedAt = accountStart.indexOf('Abgeschlossen. ${list.length} lokale Produkte sind bereit.');
 
+  assert.ok(progressCreatedAt >= 0);
+  assert.ok(progressCreatedAt < settingsReadAt);
   assert.ok(progressAttachedAt >= 0);
   assert.ok(progressAttachedAt < localLoadAt);
   assert.ok(localLoadAt < syncAt);
   assert.ok(syncAt < yearlyBreakdownAt);
   assert.ok(yearlyBreakdownAt < completedAt);
+  assert.match(accountStart, /await waitForDashboardRefreshIdle\(\)/);
   assert.match(accountStart, /await backendHandler\.syncProducts\(list\)/);
   assert.match(accountStart, /setAutomaticSyncStep\(1, 'Oberfläche und Sync-Einstellungen/);
   assert.match(accountStart, /Automatic account initialization failed/);
@@ -404,6 +627,8 @@ test('account startup sync and orders autoload are explicit while the storage lo
     userscriptSource.indexOf('async function createUI_taxextractor')
   );
   assert.doesNotMatch(storageLoader, /syncProducts|postJson|GM_xmlhttpRequest/);
+  assert.match(storageLoader, /const shouldReportProgress = progressOptions !== false/);
+  assert.match(storageLoader, /if \(!shouldReportProgress\) return/);
 
   const ordersUi = userscriptSource.slice(
     userscriptSource.indexOf('function createUIorderpage'),
@@ -421,6 +646,7 @@ test('seven-step sync feedback stays inside the progress bar', async () => {
     shown: false,
     text: '',
     percentage: -1,
+    state: '',
     show() {
       this.shown = true;
     },
@@ -429,6 +655,9 @@ test('seven-step sync feedback stays inside the progress bar', async () => {
     },
     setFillWidth(percentage) {
       this.percentage = percentage;
+    },
+    setState(state) {
+      this.state = state;
     }
   };
   context.document.getElementById = id => id === 'status' ? status : null;
@@ -440,7 +669,12 @@ test('seven-step sync feedback stays inside the progress bar', async () => {
   assert.match(progress.text, /Schritt 4\/7/);
   assert.match(progress.text, /Teilwert-Antwort/);
   assert.strictEqual(progress.percentage, 50);
+  assert.strictEqual(progress.state, 'info');
   assert.strictEqual(status.textContent, '');
+
+  api.setAutomaticSyncStep(7, 'Server nicht erreichbar.', 1, 'error');
+  assert.strictEqual(progress.percentage, 100);
+  assert.strictEqual(progress.state, 'error');
 });
 
 test('validation rejects unsafe backend names/import keys and HTML is escaped', async () => {
