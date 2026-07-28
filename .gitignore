@@ -1,0 +1,11 @@
+# Never commit private/reference SQLite databases or their journal files.
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+
+# Local integration-test runtime artifacts.
+.integration-runtime/
