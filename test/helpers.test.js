@@ -15,7 +15,7 @@ test('calculateEuerValues handles cancellations', () => {
 });
 
 test('calculateEuerValues before cutoff with teilwert', () => {
-  const item = { date: '2024-05-20', etv: 100, teilwert: 80 };
+  const item = { date: '20/05/2024', etv: 100, teilwert: 80 };
   const settings = { einnahmezumteilwert: true };
   const res = calculateEuerValues(item, settings, 0.8);
   assert.deepStrictEqual(res, {
@@ -27,7 +27,7 @@ test('calculateEuerValues before cutoff with teilwert', () => {
 });
 
 test('calculateEuerValues sold after cutoff uses etv for income', () => {
-  const item = { date: '2024-11-01', etv: 100, teilwert: 80, verkauft: true };
+  const item = { date: '01/11/2024', etv: 100, teilwert: 80, verkauft: true };
   const settings = { einnahmezumteilwert: true };
   const res = calculateEuerValues(item, settings, 0.8);
   assert.deepStrictEqual(res, {
@@ -39,7 +39,7 @@ test('calculateEuerValues sold after cutoff uses etv for income', () => {
 });
 
 test('calculateEuerValues preserves an explicit manual value of zero', () => {
-  const item = { date: '2024-11-01', etv: 100, teilwert: 80, myteilwert: 0 };
+  const item = { date: '01/11/2024', etv: 100, teilwert: 80, myteilwert: 0 };
   const res = calculateEuerValues(item, { einnahmezumteilwert: true }, 0.8);
   assert.deepStrictEqual(res, {
     einnahmen: 100,

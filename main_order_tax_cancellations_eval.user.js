@@ -1414,9 +1414,10 @@ GM_addStyle(`
 
             function applyDisplayFilters(items, settings, cancellations = []) {
                 return items.filter(item => {
-                    const itemDate = new Date(item.date);
-                    const itemYear = itemDate.getFullYear();
-                    const itemMonth = itemDate.getMonth();
+                    const itemDate = parseDateSafe(item.date);
+                    if (!itemDate) return false;
+                    const itemYear = itemDate.getUTCFullYear();
+                    const itemMonth = itemDate.getUTCMonth();
                     if (settings.yearFilter !== "show all years") {
                         if (settings.yearFilter === "show current year") {
                             const currentYear = new Date().getFullYear();
@@ -1573,23 +1574,47 @@ GM_addStyle(`
                 const keys = await listValues();
                 const asinKeys = keys.filter(key => key.startsWith("ASIN_"));
                 const invalidAsins = [];
+                const records = [];
 
                 for (const asinKey of asinKeys) {
-                  const asin = asinKey.replace("ASIN_", "");
-                  
-                  // Valid ASIN must have length 10 and start with a number or 'B'
-                  if (asin.length !== 10 || !/^[0-9B]/.test(asin)) {
-                    invalidAsins.push(asin);
+                  const sourceAsin = asinKey.slice(5);
+                  const asin = normalizeAsin(sourceAsin);
+                  if (!asin) {
+                    invalidAsins.push(sourceAsin);
                     await db.keyValuePairs.delete(asinKey);
-                    console.log(`Removed invalid ASIN: ${asin}`);
+                    console.log(`Removed invalid ASIN: ${sourceAsin}`);
+                    continue;
                   }
+                  const stored = await db.keyValuePairs.get(asinKey);
+                  const valueObject = parseStoredProductDate(stored?.value, `local product ${sourceAsin}`);
+                  records.push({
+                    asin,
+                    sourceAsin,
+                    sourceKey: asinKey,
+                    timestamp: Number(valueObject.last_update_time) || 0,
+                    valueObject
+                  });
                 }
 
-                if (invalidAsins.length > 0) {
-                  console.log(`Database cleanup complete. Removed ${invalidAsins.length} invalid ASIN(s): ${invalidAsins.join(', ')}`);
-                } else {
-                  console.log("Database validation complete. All ASINs are valid.");
+                const canonicalEntries = mergeCanonicalProductRecords(records);
+                let correctedAsins = 0;
+                for (const entry of canonicalEntries) {
+                  const needsCorrection = entry.variants.length > 1
+                    || entry.variants.some(variant => variant.sourceAsin !== entry.asin);
+                  if (!needsCorrection) continue;
+                  await setValue(`ASIN_${entry.asin}`, JSON.stringify(entry.valueObject));
+                  for (const variant of entry.variants) {
+                    if (variant.sourceKey !== `ASIN_${entry.asin}`) {
+                      await db.keyValuePairs.delete(variant.sourceKey);
+                    }
+                  }
+                  correctedAsins++;
                 }
+
+                console.log(
+                  `Database validation complete. Removed ${invalidAsins.length} invalid ASIN(s); `
+                  + `canonicalized ${correctedAsins} ASIN group(s).`
+                );
               } catch (error) {
                 console.error("Error during database validation:", error);
               }
@@ -1623,15 +1648,15 @@ GM_addStyle(`
                 let use_teilwert = getTeilwert(item, settings) ?? (item.etv * avgTeilwertEtvRatio);
                 if (item.storniert) return { einnahmen: 0, ausgaben: 0, entnahmen: 0, einnahmen_aus_anlagevermoegen: 0 };
 
-                const itemDate = new Date(item.date);
-                const cutoffDate = new Date(2024, 9, 1);
+                const itemDate = parseDateSafe(item.date);
+                const cutoffDate = new Date(Date.UTC(2024, 9, 1));
 
                 let einnahmen = 0;
                 let ausgaben = 0;
                 let entnahmen = 0;
                 let einnahmen_aus_anlagevermoegen = 0;
 
-                if (settings.einnahmezumteilwert && itemDate < cutoffDate) {
+                if (settings.einnahmezumteilwert && itemDate && itemDate < cutoffDate) {
                     einnahmen += use_teilwert;
                     ausgaben += use_teilwert;
                 } else {
@@ -1666,90 +1691,88 @@ GM_addStyle(`
                   return etv;
               }
 
-              function parseDateSafe(dateStr) {
-                if (!dateStr) return null;
-                if (dateStr instanceof Date) {
-                  return Number.isNaN(dateStr.getTime()) ? null : new Date(dateStr.getTime());
+              function createCalendarDateParts(year, month, day) {
+                const numericYear = Number(year);
+                const numericMonth = Number(month);
+                const numericDay = Number(day);
+                if (
+                  !Number.isInteger(numericYear)
+                  || !Number.isInteger(numericMonth)
+                  || !Number.isInteger(numericDay)
+                  || numericYear < 1000
+                  || numericYear > 9999
+                  || numericMonth < 1
+                  || numericMonth > 12
+                ) {
+                  return null;
                 }
-                if (typeof dateStr !== 'string') return null;
-                let trimmed = dateStr.trim();
-                if (!trimmed) return null;
-
-                const createValidatedDate = (year, month, day) => {
-                  const numericYear = Number(year);
-                  const numericMonth = Number(month);
-                  const numericDay = Number(day);
-                  if (!Number.isInteger(numericYear) || !Number.isInteger(numericMonth) || !Number.isInteger(numericDay)) {
-                    return null;
-                  }
-                  const parsed = new Date(Date.UTC(numericYear, numericMonth - 1, numericDay));
-                  if (
-                    parsed.getUTCFullYear() !== numericYear
-                    || parsed.getUTCMonth() !== numericMonth - 1
-                    || parsed.getUTCDate() !== numericDay
-                  ) {
-                    return null;
-                  }
-                  return parsed;
-                };
-
-                // if first 4 digits are a year, assume YYYY-MM-DD format
-                if (/^\d{4}/.test(trimmed)) {
-                    const isoDateParts = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-                    if (isoDateParts && !createValidatedDate(isoDateParts[1], isoDateParts[2], isoDateParts[3])) {
-                      return null;
-                    }
-                    const parsed = new Date(trimmed);
-                    if (!Number.isNaN(parsed.getTime())) return parsed;
+                const leapYear = numericYear % 4 === 0 && (numericYear % 100 !== 0 || numericYear % 400 === 0);
+                const daysPerMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+                if (numericDay < 1 || numericDay > daysPerMonth[numericMonth - 1]) {
+                  return null;
                 }
+                return { year: numericYear, month: numericMonth, day: numericDay };
+              }
 
-                // remove time or other trailing parts
-                const fullDateText = trimmed;
-                trimmed = trimmed.split(/[ ,]/)[0];
+              function parseOrderDateParts(dateValue) {
+                if (!dateValue) return null;
+                if (dateValue instanceof Date) {
+                  if (Number.isNaN(dateValue.getTime())) return null;
+                  return createCalendarDateParts(
+                    dateValue.getUTCFullYear(),
+                    dateValue.getUTCMonth() + 1,
+                    dateValue.getUTCDate()
+                  );
+                }
+                if (typeof dateValue !== 'string') return null;
+                const fullDateText = dateValue.trim();
+                if (!fullDateText) return null;
 
-                // formats DD[./-]MM[./-]YYYY or DD[./-]MM[./-]YY
-                let match = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+                // Backend compatibility: accept ISO timestamps, but retain only their calendar-date prefix.
+                let match = fullDateText.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:$|[T\s])/);
                 if (match) {
-                  let day = match[1].padStart(2, '0');
-                  let month = match[2].padStart(2, '0');
-                  let year = match[3];
-                  if (year.length === 2) year = '20' + year;
-                  const parsed = createValidatedDate(year, month, day);
-                  if (parsed) return parsed;
+                  return createCalendarDateParts(match[1], match[2], match[3]);
                 }
 
-                // formats YYYY[./-]MM[./-]DD or YY[./-]MM[./-]DD
-                match = trimmed.match(/^(\d{2,4})[./-](\d{1,2})[./-](\d{1,2})$/);
+                const numericDateText = fullDateText.split(/[ ,]/)[0];
+                match = numericDateText.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
                 if (match) {
-                  let year = match[1];
-                  let month = match[2].padStart(2, '0');
-                  let day = match[3].padStart(2, '0');
-                  if (year.length === 2) year = '20' + year;
-                  const parsed = createValidatedDate(year, month, day);
-                  if (parsed) return parsed;
+                  const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+                  return createCalendarDateParts(year, match[2], match[1]);
                 }
 
-                // textual month names e.g. 1. Januar 2024
-                trimmed = fullDateText.replace(/\//g, '.').replace(/\s+/g, ' ').trim();
+                match = numericDateText.match(/^(\d{2,4})[./-](\d{1,2})[./-](\d{1,2})$/);
+                if (match) {
+                  const year = match[1].length === 2 ? `20${match[1]}` : match[1];
+                  return createCalendarDateParts(year, match[2], match[3]);
+                }
 
                 const monthNames = {
                   'Januar':1,'Februar':2,'März':3,'Maerz':3,'April':4,'Mai':5,
                   'Juni':6,'Juli':7,'August':8,'September':9,'Oktober':10,'November':11,'Dezember':12
                 };
-
-                match = trimmed.match(/(\d{1,2})\.?\s*([A-Za-zäöüÄÖÜß]+)\s*(\d{2,4})/);
+                const textualDate = fullDateText.replace(/\//g, '.').replace(/\s+/g, ' ').trim();
+                match = textualDate.match(/(\d{1,2})\.?\s*([A-Za-zäöüÄÖÜß]+)\s*(\d{2,4})/);
                 if (match) {
-                  const day = match[1].padStart(2, '0');
-                  const monthIndex = monthNames[match[2]];
-                  let year = match[3];
-                  if (year.length === 2) year = '20' + year;
-                  if (monthIndex) {
-                    const parsed = createValidatedDate(year, monthIndex, day);
-                    if (parsed) return parsed;
-                  }
+                  const month = monthNames[match[2]];
+                  const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+                  if (month) return createCalendarDateParts(year, month, match[1]);
                 }
-
                 return null;
+              }
+
+              function formatOrderDate(parts) {
+                if (!parts) return null;
+                return `${String(parts.day).padStart(2, '0')}/${String(parts.month).padStart(2, '0')}/${parts.year}`;
+              }
+
+              function normalizeOrderDate(dateValue) {
+                return formatOrderDate(parseOrderDateParts(dateValue));
+              }
+
+              function parseDateSafe(dateValue) {
+                const parts = parseOrderDateParts(dateValue);
+                return parts ? new Date(Date.UTC(parts.year, parts.month - 1, parts.day)) : null;
               }
 
               const ASIN_PATTERN = /^[A-Z0-9]{10}$/;
@@ -1762,11 +1785,50 @@ GM_addStyle(`
                 return ASIN_PATTERN.test(asin) ? asin : null;
               }
 
-              function parseStoredProduct(value, context = 'product') {
+              function parseStoredProductDate(value, context = 'product') {
                 const parsed = typeof value === 'string' ? JSON.parse(value) : value;
                 if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
                   throw new Error(`Invalid ${context}: expected a JSON object.`);
                 }
+
+                if (Object.prototype.hasOwnProperty.call(parsed, 'date')) {
+                  const normalizedDate = normalizeOrderDate(parsed.date);
+                  if (normalizedDate) parsed.date = normalizedDate;
+                }
+                return parsed;
+              }
+
+              function mergeCanonicalProductRecords(records) {
+                const grouped = new Map();
+                for (const record of records) {
+                  const variants = grouped.get(record.asin) || [];
+                  variants.push(record);
+                  grouped.set(record.asin, variants);
+                }
+                return Array.from(grouped, ([asin, variants]) => {
+                  const orderedVariants = [...variants].sort((left, right) => {
+                    const timestampDifference = left.timestamp - right.timestamp;
+                    if (timestampDifference !== 0) return timestampDifference;
+                    const canonicalDifference = Number(left.sourceAsin === asin)
+                      - Number(right.sourceAsin === asin);
+                    if (canonicalDifference !== 0) return canonicalDifference;
+                    return left.sourceAsin.localeCompare(right.sourceAsin);
+                  });
+                  const valueObject = {};
+                  for (const variant of orderedVariants) {
+                    Object.assign(valueObject, variant.valueObject);
+                  }
+                  return {
+                    asin,
+                    timestamp: Math.max(...orderedVariants.map(variant => variant.timestamp)),
+                    valueObject,
+                    variants: orderedVariants
+                  };
+                });
+              }
+
+              function parseStoredProduct(value, context = 'product') {
+                const parsed = parseStoredProductDate(value, context);
 
                 const hasLegacyMyTeilwert = Object.prototype.hasOwnProperty.call(parsed, 'myteilwert');
                 const hasCanonicalMyTeilwert = Object.prototype.hasOwnProperty.call(parsed, 'myTeilwert');
@@ -2060,7 +2122,7 @@ GM_addStyle(`
                         throw new Error('Private backend returned an invalid data list.');
                       }
 
-                      const entries = result.data.map((entry) => {
+                      const serverRecords = result.data.map((entry) => {
                         const asin = normalizeAsin(entry?.ASIN);
                         if (!asin || typeof entry?.value !== 'string') {
                           throw new Error('Private backend returned an invalid product entry.');
@@ -2069,9 +2131,39 @@ GM_addStyle(`
                         if (!Number.isInteger(timestamp) || timestamp < 0) {
                           throw new Error(`Private backend returned an invalid timestamp for ${asin}.`);
                         }
-                        parseStoredProduct(entry.value, `server product ${asin}`);
-                        return { asin, timestamp, value: entry.value };
+                        const parsedProduct = parseStoredProductDate(entry.value, `server product ${asin}`);
+                        return {
+                          asin,
+                          sourceAsin: entry.ASIN,
+                          timestamp,
+                          remoteValue: entry.value,
+                          valueObject: parsedProduct
+                        };
                       });
+                      const entries = mergeCanonicalProductRecords(serverRecords).map(entry => ({
+                        ...entry,
+                        value: JSON.stringify(entry.valueObject),
+                        remoteValue: JSON.stringify(entry.variants.map(variant => ({
+                          ASIN: variant.sourceAsin,
+                          timestamp: variant.timestamp,
+                          value: variant.remoteValue
+                        })))
+                      }));
+                      const corrections = entries.filter(entry => (
+                        entry.variants.length > 1
+                        || entry.variants.some(variant => variant.sourceAsin !== entry.asin)
+                      ));
+                      if (corrections.length > 0) {
+                        await this.postPrivate(
+                          config,
+                          "update_asin",
+                          corrections.map(entry => ({
+                            ASIN: entry.asin,
+                            timestamp: 0,
+                            value: entry.value
+                          }))
+                        );
+                      }
 
                       let updated = 0;
                       let unchanged = 0;
@@ -2084,7 +2176,7 @@ GM_addStyle(`
                         const productKey = `ASIN_${entry.asin}`;
                         const timestampKey = `PRIVATE_BACKEND_TIMESTAMP_${config.backendName}_${config.storageScope}_${entry.asin}`;
                         const fingerprintKey = `PRIVATE_BACKEND_FINGERPRINT_${config.backendName}_${config.storageScope}_${entry.asin}`;
-                        const remoteFingerprint = getStringFingerprint(entry.value);
+                        const remoteFingerprint = getStringFingerprint(entry.remoteValue);
                         const wasUpdated = await enqueueProductOperation(entry.asin, async () => {
                           const localValue = await getValue(productKey);
                           const lastSeenTimestamp = await getValue(timestampKey, null);
@@ -2120,7 +2212,7 @@ GM_addStyle(`
 
                       setProgress(`Privates Backend: Download abgeschlossen (${updated} aktualisiert, ${unchanged} unverändert).`, 100, "success");
                       updateBackendStatusText(`Privates Backend: Download erfolgreich (${updated} aktualisiert, ${unchanged} unverändert).`, "success");
-                      return { updated, unchanged };
+                      return { updated, unchanged, canonicalized: corrections.length };
                     } catch (error) {
                       setProgress(`Privates Backend: Download fehlgeschlagen (${error.message}).`, 100, "error");
                       updateBackendStatusText(`Privates Backend: Download fehlgeschlagen (${error.message}).`, "error");
@@ -2153,12 +2245,12 @@ GM_addStyle(`
                           asinKeys.length ? ((index + 1) / asinKeys.length) * 100 : 100
                         );
                         const parsedData = parseStoredProduct(asinDataAll[asinKey], `local product ${asin}`);
-                        const jsDate = parseDateSafe(parsedData.date);
-                        if (!jsDate) {
+                        const normalizedDate = normalizeOrderDate(parsedData.date);
+                        if (!normalizedDate) {
                           invalidDates.push(parsedData.date);
                           continue;
                         }
-                        parsedData.date = jsDate.toISOString();
+                        parsedData.date = normalizedDate;
                         payload.push({ ASIN: asin, timestamp: 0, value: JSON.stringify(parsedData) });
                       }
 
@@ -2606,12 +2698,12 @@ GM_addStyle(`
                       let jsonData = asinDataAll[asinKey]; //await getValue(asinKey);
 
                       let parsedData = parseStoredProduct(jsonData, `local product ${asin}`);
-                      let jsDate = parseDateSafe(parsedData.date);
-                      if (!jsDate) {
+                      const normalizedDate = normalizeOrderDate(parsedData.date);
+                      if (!normalizedDate) {
                         errorDates.push(parsedData.date);
                         continue;
                       }
-                      parsedData.date = jsDate.toISOString();
+                      parsedData.date = normalizedDate;
 
                       asinData.push({
                           ...parsedData,
@@ -3222,13 +3314,13 @@ GM_addStyle(`
       if (!isCurrent()) return { stale: true };
       const sortedItems = list.map(item => ({
           ...item,
-          date: new Date(item.date)
-      })).sort((a, b) => a.date - b.date);
+          date: parseDateSafe(item.date)
+      })).filter(item => item.date).sort((a, b) => a.date - b.date);
 
-      const yearSet = new Set(sortedItems.map(item => item.date.getFullYear()));
+      const yearSet = new Set(sortedItems.map(item => item.date.getUTCFullYear()));
       if (
           settings.add2ndhalf2023to2024
-          && sortedItems.some(item => item.date.getFullYear() === 2023 && item.date.getMonth() >= 6)
+          && sortedItems.some(item => item.date.getUTCFullYear() === 2023 && item.date.getUTCMonth() >= 6)
       ) {
           yearSet.add(2024);
       }
@@ -3247,19 +3339,19 @@ GM_addStyle(`
           if (settings.add2ndhalf2023to2024) {
               if (year === 2023) {
                   items = sortedItems.filter(item => (
-                      item.date.getFullYear() === 2023
-                      && item.date.getMonth() < 6
+                      item.date.getUTCFullYear() === 2023
+                      && item.date.getUTCMonth() < 6
                   ));
               } else if (year === 2024) {
                   items = sortedItems.filter(item => (
-                      item.date.getFullYear() === 2024
-                      || (item.date.getFullYear() === 2023 && item.date.getMonth() >= 6)
+                      item.date.getUTCFullYear() === 2024
+                      || (item.date.getUTCFullYear() === 2023 && item.date.getUTCMonth() >= 6)
                   ));
               } else {
-                  items = sortedItems.filter(item => item.date.getFullYear() === year);
+                  items = sortedItems.filter(item => item.date.getUTCFullYear() === year);
               }
           } else {
-              items = sortedItems.filter(item => item.date.getFullYear() === year);
+              items = sortedItems.filter(item => item.date.getUTCFullYear() === year);
           }
           return { year, items };
       }).filter(entry => entry.items.length > 0);
@@ -3315,9 +3407,9 @@ GM_addStyle(`
               isCurrent,
               render: target => createPieChart(yearlyItems, target)
           });
-          let targetDate = new Date(year, 11, 31);
+          let targetDate = new Date(Date.UTC(year, 11, 31));
           if (year === 2023 && settings.add2ndhalf2023to2024) {
-              targetDate = new Date(year, 5, 30);
+              targetDate = new Date(Date.UTC(year, 5, 30));
           }
           await createLazyAnalysisSection(yearBody, {
               id: `vtt-etv-plot-${year}`,
@@ -3359,12 +3451,12 @@ GM_addStyle(`
     const dataByDateMap = new Map();
     let currentEtv = 0;
     filteredItems.forEach(d => {
-        const dateKey = d.date.toISOString().split('T')[0];
+        const dateKey = normalizeOrderDate(d.date);
         currentEtv += d.etv;
         dataByDateMap.set(dateKey, currentEtv);
     });
 
-    const dataByDate = Array.from(dataByDateMap, ([date, etv]) => ({ date: new Date(date), etv }));
+    const dataByDate = Array.from(dataByDateMap, ([date, etv]) => ({ date: parseDateSafe(date), etv }));
 
     const historicalTrace = {
         x: dataByDate.map(d => d.date),
@@ -3420,12 +3512,12 @@ GM_addStyle(`
                 const teilwertDataMap = new Map();
                 let currentTeilwert = 0;
                 filteredItems.forEach(d => {
-                    const dateKey = d.date.toISOString().split('T')[0];
+                    const dateKey = normalizeOrderDate(d.date);
                     let use_teilwert = getTeilwert(d, settings);
                     currentTeilwert += (use_teilwert != null ? use_teilwert : (d.etv * avgTeilwertEtvRatio));
                     teilwertDataMap.set(dateKey, currentTeilwert);
                 });
-                const teilwertData = Array.from(teilwertDataMap, ([date, teilwert]) => ({ date: new Date(date), teilwert }));
+                const teilwertData = Array.from(teilwertDataMap, ([date, teilwert]) => ({ date: parseDateSafe(date), teilwert }));
 
                 const teilwertTrace = {
                     x: teilwertData.map(d => d.date),
@@ -3573,9 +3665,9 @@ async function createPieChart(list, parentElement) {
 
     if (settings.streuartikelregelungTeilwert) {
         filteredList = filteredList.filter(item => {
-            const orderDate = new Date(item.date);
+            const orderDate = parseDateSafe(item.date);
             let use_teilwert = getTeilwert(item, settings);
-            return (orderDate >= new Date(2024, 9, 1) || use_teilwert > 11.90);
+            return (orderDate && orderDate >= new Date(Date.UTC(2024, 9, 1))) || use_teilwert > 11.90;
         });
     }
 
@@ -3814,7 +3906,7 @@ async function createPieChart(list, parentElement) {
                           continue;
                         }
                         const orderDate = orderElement.textContent.trim();
-                        const parsedDate = parseDateSafe(orderDate);
+                        const normalizedDate = normalizeOrderDate(orderDate);
                         const asinElement = order.querySelector("a[href^='https://www.amazon.de/dp/']");
                         const productName = productNameElement.textContent.trim();
                         const etv = etvstrtofloat(etvElement.textContent.trim());
@@ -3831,14 +3923,14 @@ async function createPieChart(list, parentElement) {
                                 asin = normalizeAsin(alternativeAsinElement.textContent.trim().split(/\s+/)[0]);
                             }
                         }
-                        if (!asin || !orderNumber || !parsedDate || !Number.isFinite(etv)) {
+                        if (!asin || !orderNumber || !normalizedDate || !Number.isFinite(etv)) {
                             errors.push(orderDate || 'Unlesbare Bestellzeile');
                             continue;
                         }
                         data[asin] = {
                             name: productName,
                             ordernumber: orderNumber,
-                            date: parsedDate.toISOString(),
+                            date: normalizedDate,
                             etv
                         };
                     }
@@ -3870,7 +3962,7 @@ async function createPieChart(list, parentElement) {
                       const name = row[2];
                       const orderType = row[3];
                       const orderDate = row[4];
-                      const parsedDate = parseDateSafe(orderDate);
+                      const normalizedDate = normalizeOrderDate(orderDate);
                       const etvString = row[row.length - 1];
                       const etv = etvstrtofloat(etvString);
                       if (!asin) continue;
@@ -3887,10 +3979,10 @@ async function createPieChart(list, parentElement) {
                           data[asin] = {
                               name: String(name ?? ''),
                               ordernumber: String(orderNumber ?? ''),
-                              date: parsedDate ? parsedDate.toISOString() : orderDate,
+                              date: normalizedDate || orderDate,
                               etv: etv
                           };
-                          if (!parsedDate) {
+                          if (!normalizedDate) {
                               errors.push(orderDate);
                           }
                       }
@@ -4143,7 +4235,7 @@ async function createPieChart(list, parentElement) {
 
               table += `<tr>
                           <td>${escapeHtml(asin)}</td>
-                          <td style="white-space: nowrap;">${escapeHtml(item.date ? String(item.date).split('T')[0] : 'N/A')}</td>
+                          <td style="white-space: nowrap;">${escapeHtml(item.date || 'N/A')}</td>
                           <td>${escapeHtml(item.name || 'N/A')}</td>
                           <td>${escapeHtml(item.etv)}</td>
                           <td>${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${asin}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.keepa)}</a>` : 'N/A'}</td>
@@ -4208,7 +4300,7 @@ async function createPieChart(list, parentElement) {
             const info = `
                 <p>Name: ${escapeHtml(item.name)}</p>
                 <p>ASIN: ${escapeHtml(asin)}</p>
-                <p>Date: ${escapeHtml(item.date ? String(item.date).split('T')[0] : 'N/A')}</p>
+                <p>Date: ${escapeHtml(item.date || 'N/A')}</p>
                 <p>ETV: ${escapeHtml(item.etv)}</p>
                 <p>Keepa: ${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${asin}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.keepa)}</a>` : 'N/A'}</p>
                 <p>Teilwert v1: ${item.teilwert != null ? escapeHtml(item.teilwert) : 'N/A'}</p>
@@ -4310,7 +4402,7 @@ async function createPieChart(list, parentElement) {
 
       list.forEach(item => {
 
-          const year = item.date.getFullYear();
+          const year = item.date.getUTCFullYear();
 
           if (!yearlyData[year]) {
               yearlyData[year] = { orders: 0, cancellations: 0 };
@@ -4406,7 +4498,9 @@ async function createPieChart(list, parentElement) {
                       gmRequest,
                       isValidBackendName,
                       normalizeAsin,
+                      normalizeOrderDate,
                       normalizeSettings,
+                      parseOrderDateParts,
                       parseDateSafe,
                       parseStoredProduct,
                       postJson,
@@ -4417,6 +4511,7 @@ async function createPieChart(list, parentElement) {
                       showAllData,
                       updateStoredProduct,
                       getValue,
+                      validateAndFixDatabase,
                       validateDatabaseImport
                   });
               }

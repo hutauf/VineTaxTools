@@ -91,6 +91,8 @@ test('the userscript has a single Promise-based GM request gateway', () => {
   assert.strictEqual((userscriptSource.match(/^\/\/ @require /gm) || []).length, 7);
   assert.doesNotMatch(userscriptSource, /console\.log\(\s*['"`]POST /);
   assert.doesNotMatch(userscriptSource, /setFillWidth\(i\s*\*\s*10\)/);
+  assert.doesNotMatch(userscriptSource, /toISOString\s*\(/);
+  assert.doesNotMatch(userscriptSource, /new Date\s*\(\s*item\.date\s*\)/);
 });
 
 test('gmRequest resolves successful responses and propagates HTTP, timeout and invalid JSON errors', async () => {
@@ -194,6 +196,110 @@ test('deleting the private database clears scoped markers so recreated timestamp
     await api.getValue('PRIVATE_BACKEND_TIMESTAMP_other_scope_B012345678'),
     123
   );
+});
+
+test('private download normalizes a backend ISO date locally without writing it back', async () => {
+  const { api, context } = await loadUserscript();
+  const handler = new api.PrivateBackendHandler();
+  await api.setValue('token', 'redacted-test-token');
+  await api.setValue('pythonanywherebackend', 'hutaufvine');
+
+  const requests = [];
+  context.GM_xmlhttpRequest = options => {
+    const body = JSON.parse(options.data);
+    requests.push(body.request);
+    options.onload({
+      status: 200,
+      responseText: JSON.stringify({
+        status: 'success',
+        data: [{
+          ASIN: 'B012345678',
+          last_update_time: 42,
+          value: JSON.stringify({ name: 'Product', date: '2025-03-30T23:00:00.000Z', etv: 10 })
+        }]
+      })
+    });
+  };
+
+  await handler.downloadDatabase();
+
+  assert.deepStrictEqual(requests, ['get_all']);
+  assert.strictEqual(
+    JSON.parse(await api.getValue('ASIN_B012345678')).date,
+    '30/03/2025'
+  );
+});
+
+test('private download merges ASIN case variants and writes one canonical correction', async () => {
+  const { api, context } = await loadUserscript();
+  const handler = new api.PrivateBackendHandler();
+  await api.setValue('token', 'redacted-test-token');
+  await api.setValue('pythonanywherebackend', 'hutaufvine');
+
+  const requests = [];
+  context.GM_xmlhttpRequest = options => {
+    const body = JSON.parse(options.data);
+    requests.push(body);
+    const response = body.request === 'get_all'
+      ? {
+          status: 'success',
+          data: [
+            {
+              ASIN: 'b012345678',
+              last_update_time: 10,
+              value: JSON.stringify({
+                name: 'older',
+                date: '2025-05-04T23:00:00.000Z',
+                olderUnknown: true
+              })
+            },
+            {
+              ASIN: 'B012345678',
+              last_update_time: 20,
+              value: JSON.stringify({ name: 'newer', newerUnknown: true })
+            }
+          ]
+        }
+      : { status: 'success', inserted: 0, updated: 1, skipped: 0 };
+    options.onload({ status: 200, responseText: JSON.stringify(response) });
+  };
+
+  const result = await handler.downloadDatabase();
+  const localProduct = JSON.parse(await api.getValue('ASIN_B012345678'));
+  const correction = requests[1].payload[0];
+  const correctedValue = JSON.parse(correction.value);
+
+  assert.strictEqual(result.canonicalized, 1);
+  assert.deepStrictEqual(requests.map(request => request.request), ['get_all', 'update_asin']);
+  assert.strictEqual(correction.ASIN, 'B012345678');
+  assert.strictEqual(correction.timestamp, 0);
+  assert.strictEqual(correctedValue.name, 'newer');
+  assert.strictEqual(correctedValue.olderUnknown, true);
+  assert.strictEqual(correctedValue.newerUnknown, true);
+  assert.strictEqual(correctedValue.date, '04/05/2025');
+  assert.deepStrictEqual(localProduct, correctedValue);
+});
+
+test('local startup validation merges lowercase ASIN keys into the canonical key', async () => {
+  const { api } = await loadUserscript();
+  await api.setValue('ASIN_b012345678', JSON.stringify({
+    name: 'lowercase',
+    olderUnknown: true,
+    last_update_time: 10
+  }));
+  await api.setValue('ASIN_B012345678', JSON.stringify({
+    name: 'canonical',
+    newerUnknown: true,
+    last_update_time: 20
+  }));
+
+  await api.validateAndFixDatabase();
+
+  const canonical = JSON.parse(await api.getValue('ASIN_B012345678'));
+  assert.strictEqual(await api.getValue('ASIN_b012345678'), null);
+  assert.strictEqual(canonical.name, 'canonical');
+  assert.strictEqual(canonical.olderUnknown, true);
+  assert.strictEqual(canonical.newerUnknown, true);
 });
 
 test('syncProducts serializes overlapping runs and coalesces pending values per ASIN', async () => {
@@ -333,6 +439,7 @@ test('public estimator and private v1 DTOs retain their existing shapes', async 
   assert.strictEqual(Object.hasOwn(privateValue, 'ASIN'), false);
   assert.strictEqual(privateValue.myteilwert, null);
   assert.strictEqual(privateValue.myTeilwert, null);
+  assert.strictEqual(privateValue.date, '01/01/2025');
   assert.strictEqual(privateValue.verkauft, true);
   assert.strictEqual(privateValue.usageStatus.includes('verkauft'), true);
 });
@@ -745,6 +852,10 @@ test('validation rejects unsafe backend names/import keys and HTML is escaped', 
 test('date parsing validates calendar dates and supports German month names', async () => {
   const { api } = await loadUserscript();
   assert.strictEqual(api.parseDateSafe('1. Januar 2024').toISOString(), '2024-01-01T00:00:00.000Z');
+  assert.strictEqual(api.normalizeOrderDate('2024-07-31T23:59:59.000Z'), '31/07/2024');
+  assert.strictEqual(api.normalizeOrderDate('31.07.2024'), '31/07/2024');
+  assert.strictEqual(api.normalizeOrderDate(''), null);
+  assert.strictEqual(api.normalizeOrderDate('31/02/2024'), null);
   assert.strictEqual(api.parseDateSafe('31.02.2024'), null);
   assert.strictEqual(api.parseDateSafe('2024-02-31'), null);
   assert.strictEqual(api.parseDateSafe({}), null);

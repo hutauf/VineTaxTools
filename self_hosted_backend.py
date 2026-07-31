@@ -115,6 +115,63 @@ def log_changes(history_cursor, asin, timestamp, old_data, new_data):
             """, (asin, timestamp, key, new_value, old_value))
 
 
+def canonicalize_asin_entries(cursor, asin):
+    """Collapse case-only ASIN aliases into one uppercase entry."""
+    canonical_asin = asin.upper()
+    cursor.execute(
+        """
+        SELECT ASIN, last_update_time, value
+        FROM entries
+        WHERE ASIN = ? COLLATE NOCASE
+        """,
+        (canonical_asin,),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return canonical_asin, None, False
+    if len(rows) == 1 and rows[0]["ASIN"] == canonical_asin:
+        return canonical_asin, rows[0], False
+
+    merged_data = {}
+    for row in sorted(
+        rows,
+        key=lambda entry: (
+            entry["last_update_time"],
+            entry["ASIN"] == canonical_asin,
+            entry["ASIN"],
+        ),
+    ):
+        try:
+            row_data = json.loads(row["value"])
+        except (TypeError, json.JSONDecodeError):
+            row_data = {}
+        if isinstance(row_data, dict):
+            merged_data.update(row_data)
+
+    latest_timestamp = max(row["last_update_time"] for row in rows)
+    merged_value = json.dumps(merged_data)
+    cursor.execute(
+        "DELETE FROM entries WHERE ASIN = ? COLLATE NOCASE",
+        (canonical_asin,),
+    )
+    cursor.execute(
+        """
+        INSERT INTO entries (ASIN, last_update_time, value)
+        VALUES (?, ?, ?)
+        """,
+        (canonical_asin, latest_timestamp, merged_value),
+    )
+    cursor.execute(
+        """
+        SELECT ASIN, last_update_time, value
+        FROM entries
+        WHERE ASIN = ?
+        """,
+        (canonical_asin,),
+    )
+    return canonical_asin, cursor.fetchone(), True
+
+
 # --- Storage Location and Procedure Document Helper Functions ---
 
 GENERIC_ENTITY_CONFIG = {
@@ -238,7 +295,16 @@ def data_operations():
             conn, cursor = get_db_conn(token)
             results = []
             for asin_to_fetch in payload:
-                cursor.execute("SELECT ASIN, last_update_time, value FROM entries WHERE ASIN = ?", (asin_to_fetch,))
+                cursor.execute(
+                    """
+                    SELECT ASIN, last_update_time, value
+                    FROM entries
+                    WHERE ASIN = ? COLLATE NOCASE
+                    ORDER BY ASIN = ? DESC
+                    LIMIT 1
+                    """,
+                    (asin_to_fetch, asin_to_fetch.upper()),
+                )
                 row = cursor.fetchone()
                 if row:
                     # Convert SQLite Row object to a standard dictionary
@@ -269,9 +335,6 @@ def data_operations():
                 if not isinstance(new_value_str, str):
                     return jsonify({"status": "error", "message": f"Invalid value for ASIN {asin}: must be a string."}), 400
 
-                cursor.execute("SELECT last_update_time, value FROM entries WHERE ASIN = ?", (asin,))
-                existing_entry = cursor.fetchone()
-
                 try:
                     new_data_dict = json.loads(new_value_str)
                 except json.JSONDecodeError:
@@ -280,6 +343,10 @@ def data_operations():
                 if not isinstance(new_data_dict, dict):
                     return jsonify({"status": "error", "message": f"Invalid JSON in value for ASIN {asin}: expected an object."}), 400
 
+                asin, existing_entry, asin_was_canonicalized = canonicalize_asin_entries(
+                    cursor,
+                    asin,
+                )
                 if existing_entry:
                     # Entry exists: update logic
                     existing_timestamp = existing_entry["last_update_time"]
@@ -313,6 +380,8 @@ def data_operations():
                         final_value_str = json.dumps(final_data_dict)
                         ts_to_set = new_timestamp if new_timestamp > existing_timestamp else existing_timestamp
                         cursor.execute("UPDATE entries SET last_update_time = ?, value = ? WHERE ASIN = ?", (ts_to_set, final_value_str, asin))
+                        updated_count += 1
+                    elif asin_was_canonicalized:
                         updated_count += 1
                     else:
                         skipped_count += 1
