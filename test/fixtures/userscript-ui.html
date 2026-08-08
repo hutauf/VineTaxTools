@@ -37,6 +37,7 @@
   <script src="https://d3js.org/d3.v5.min.js"></script>
   <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
   <script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
+  <script src="../../node_modules/dexie/dist/dexie.min.js"></script>
 </head>
 <body>
   <main class="fixture-page">
@@ -49,6 +50,7 @@
     window.module = { exports: {} };
     window.__VINE_TAX_TOOLS_TEST_HOOK__ = {};
     window.__fixtureErrors = [];
+    document.documentElement.dataset.vttFixtureReady = 'false';
     window.addEventListener('error', event => {
       window.__fixtureErrors.push(event.message || String(event.error || 'Unknown page error'));
     });
@@ -65,65 +67,6 @@
       ['ASIN_B000000006', { ASIN: 'B000000006', name: 'Thermobecher', date: '2025-07-11T00:00:00.000Z', etv: 24.95, teilwert_v2: 8.6 }]
     ];
 
-    class FixtureTable {
-      constructor() {
-        this.records = new Map(
-          fixtureProducts.map(([key, value]) => [key, { key, value: JSON.stringify(value) }])
-        );
-        this.records.set('settings', {
-          key: 'settings',
-          value: {
-            cancellations: false,
-            tax0: false,
-            yearFilter: 'show all years',
-            streuartikelregelung: true,
-            streuartikelregelungTeilwert: true,
-            add2ndhalf2023to2024: true,
-            einnahmezumteilwert: true,
-            useTeilwertV2: false
-          }
-        });
-        this.records.set('cancellations', { key: 'cancellations', value: ['B000000004'] });
-      }
-
-      async put(record) {
-        this.records.set(record.key, { ...record });
-      }
-
-      async bulkPut(records) {
-        for (const record of records) await this.put(record);
-      }
-
-      async get(key) {
-        return this.records.get(key);
-      }
-
-      async delete(key) {
-        this.records.delete(key);
-      }
-
-      async toArray() {
-        return Array.from(this.records.values());
-      }
-
-      toCollection() {
-        return {
-          primaryKeys: async () => Array.from(this.records.keys())
-        };
-      }
-    }
-
-    class FixtureDexie {
-      constructor() {
-        this.keyValuePairs = new FixtureTable();
-      }
-
-      version() {
-        return { stores: () => this };
-      }
-    }
-
-    window.Dexie = FixtureDexie;
     window.GM_addStyle = css => {
       const style = document.createElement('style');
       style.textContent = css.replace(/@import[^;]+;/g, '');
@@ -160,13 +103,49 @@
       }
     };
   </script>
-  <script src="../../main_order_tax_cancellations_eval.user.js"></script>
   <script>
     (async () => {
+      await Dexie.delete('myDatabase');
+      const legacyDb = new Dexie('myDatabase');
+      legacyDb.version(1).stores({ keyValuePairs: 'key' });
+      await legacyDb.keyValuePairs.bulkPut([
+        ...fixtureProducts.map(([key, value]) => ({
+          key,
+          value: JSON.stringify(value)
+        })),
+        {
+          key: 'settings',
+          value: {
+            cancellations: false,
+            tax0: false,
+            yearFilter: 'show all years',
+            streuartikelregelung: true,
+            streuartikelregelungTeilwert: true,
+            add2ndhalf2023to2024: true,
+            einnahmezumteilwert: true,
+            useTeilwertV2: false
+          }
+        },
+        { key: 'cancellations', value: ['B000000004'] }
+      ]);
+      legacyDb.close();
+
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = '../../main_order_tax_cancellations_eval.user.js';
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Produktions-Userscript konnte nicht geladen werden.'));
+        document.body.appendChild(script);
+      });
       while (typeof window.__VINE_TAX_TOOLS_TEST_HOOK__.createUI_taxextractor !== 'function') {
         await new Promise(resolve => setTimeout(resolve, 10));
       }
-      await window.__VINE_TAX_TOOLS_TEST_HOOK__.createUI_taxextractor();
+      window.__VTT_FIXTURE_READY__ = false;
+      Promise.resolve(
+        window.__VINE_TAX_TOOLS_TEST_HOOK__.createUI_taxextractor()
+      ).catch(error => {
+        window.__fixtureErrors.push(String(error?.message || error));
+      });
       const readyDeadline = Date.now() + 5000;
       while (true) {
         const progress = document.getElementById('simpleProgressBarContainer');
@@ -177,6 +156,7 @@
         await new Promise(resolve => setTimeout(resolve, 25));
       }
       window.__VTT_FIXTURE_READY__ = true;
+      document.documentElement.dataset.vttFixtureReady = 'true';
     })();
   </script>
 </body>

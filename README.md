@@ -19,6 +19,31 @@ Inwieweit dieses Tool wirklich hilfreich ist, kann ich nicht beurteilen, da die 
 5. Bestätige mit **Installieren**.
 6. Durch den im Skript hinterlegten `@updateURL` wird bei neuen Versionen automatisch ein Update angeboten.
 
+## Lokale Tests ohne Amazon-Login
+
+Die Kernlogik und die Synchronisation lassen sich ohne Violentmonkey und ohne
+echte Nutzerdaten testen:
+
+```powershell
+npm ci
+npm test
+python -m unittest test.test_self_hosted_backend
+```
+
+Für einen visuellen Browser-Smoke-Test wird eine echte alte Dexie-v1-Datenbank
+angelegt und anschließend vom unveränderten Produktions-Userscript auf das neue
+Schema migriert:
+
+```powershell
+python -m http.server 8765
+```
+
+Danach `http://127.0.0.1:8765/test/fixtures/userscript-ui.html` öffnen. Die
+Fixture enthält ausschließlich synthetische Produkte. Sie prüft die Konto-UI,
+den sichtbaren Sync-Fortschritt, Dialoge, Filter und die automatisch geladene
+Produktdatentabelle. Für die externen D3-/DataTables-Testressourcen wird eine
+Internetverbindung benötigt.
+
 ## Verfügbare Skripte
 
 ### 1. Hauptskript: `main_order_tax_cancellations_eval.user.js`
@@ -127,9 +152,12 @@ Jetzt, wo dein Backend läuft, müssen wir den Tools noch sagen, wo sie es finde
 
 8.  **Tax Summary Userscript im Vine Portal konfigurieren**
     *   Gehe im Amazon Vine Portal auf die Seite **"Konto"**.
-    *   Das Userscript sollte dir dort neue Buttons anzeigen.
-    *   Klicke auf **"Set backend"** und gib deinen PythonAnywhere-Benutzernamen ein.
-    *   Klicke danach auf **"Set token"** und gib denselben API-Token wie zuvor ein.
+    *   Öffne in der VineTaxTools-Box den Dialog **"Synchronisation"**.
+    *   Gib deinen PythonAnywhere-Benutzernamen und denselben API-Token wie zuvor ein.
+    *   Klicke auf **"Konfiguration speichern"**. Ohne Token bleiben alle Produktdaten ausschließlich lokal.
+
+Hinweise zur automatischen Datenbankmigration, zu Backups und zum Sync-V2-
+Produktions-Gate stehen in [`SELF_HOSTED_SYNC_V2.md`](SELF_HOSTED_SYNC_V2.md).
 
 ---
 

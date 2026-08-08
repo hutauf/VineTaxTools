@@ -9,3 +9,6 @@ __pycache__/
 
 # Local integration-test runtime artifacts.
 .integration-runtime/
+
+# Node-only test dependencies; the userscript keeps its pinned @require URLs.
+node_modules/

@@ -4,5 +4,9 @@
   "description": "",
   "scripts": {
     "test": "node --test"
+  },
+  "devDependencies": {
+    "dexie": "4.4.4",
+    "fake-indexeddb": "6.2.4"
   }
 }
