@@ -825,7 +825,7 @@ test('legacy V1 auto-upload remains suppressed after a deliberate remote delete'
   assert.strictEqual(await api.getValue('ASIN_B012345678') !== null, true);
 });
 
-test('V2 danger-zone delete survives the following empty generation snapshot without reupload', async () => {
+test('V2 danger-zone delete preserves recovery and gives explicit edits a fresh baseline', async () => {
   const { api, context } = await loadUserscript();
   const handler = new api.PrivateBackendHandler();
   await api.setValue('token', 'v2-delete-recovery-token');
@@ -877,12 +877,154 @@ test('V2 danger-zone delete survives the following empty generation snapshot wit
   const recovery = JSON.parse(await api.getValue('ASIN_B012345678'));
   assert.strictEqual(recovery.name, 'Protected local recovery');
   assert.strictEqual(recovery.unknown_local_backup, true);
+  const recoveryRow = await api.db.products.get([config.profileId, 'B012345678']);
+  assert.strictEqual(recoveryRow.recordRevision, 0);
   assert.strictEqual(await api.db.outbox.count(), 0);
   assert.strictEqual(await api.db.shadows.count(), 0);
   const state = await api.db.syncState.get(config.profileId);
   assert.strictEqual(state.generationId, 'generation-after-delete');
   assert.strictEqual(state.remoteDeleteRecovery, true);
   assert.strictEqual(state.lastHash, emptyHash);
+
+  await api.updateStoredProduct('B012345678', current => ({
+    ...current,
+    name: 'Explicitly recreate locally'
+  }));
+  const explicitMutation = (await api.db.outbox.toArray())[0];
+  assert.strictEqual(explicitMutation.baseRevision, 0);
+});
+
+test('V2 repairs an already stuck base-revision-ahead recovery mutation', async () => {
+  const { api, context } = await loadUserscript();
+  const handler = new api.PrivateBackendHandler();
+  await api.setValue('token', 'v2-base-repair-token');
+  const config = await handler.getPrivateConfig();
+  const localData = {
+    name: 'Local recovery copy',
+    etv: 4,
+    unknown_local_backup: true
+  };
+  const serverData = {
+    ...localData,
+    name: 'Recreated after repair'
+  };
+  const emptyHash = await api.sha256Hex(api.canonicalizeJson([]));
+  const serverHash = await api.sha256Hex(api.canonicalizeJson([{
+    entity_type: 'product',
+    entity_id: 'B012345678',
+    data: serverData
+  }]));
+  await api.db.products.put(api.createProductRow(
+    config.profileId,
+    'B012345678',
+    localData,
+    7
+  ));
+  const mutation = api.createOutboxMutation({
+    profileId: config.profileId,
+    entityType: 'product',
+    entityId: 'B012345678',
+    baseRevision: 7,
+    set: serverData,
+    source: 'local-edit'
+  });
+  mutation.attempts = 1;
+  await api.db.outbox.put(mutation);
+  await api.db.syncState.put({
+    profileId: config.profileId,
+    mode: 'v2',
+    generationId: 'new-generation',
+    cursor: 1,
+    lastHash: emptyHash,
+    lastSnapshotAt: Date.now(),
+    lastHashVerifiedAt: Date.now(),
+    remoteDeleteRecovery: true
+  });
+
+  const requests = [];
+  const pushedBases = [];
+  const pushedMutationIds = [];
+  context.GM_xmlhttpRequest = options => {
+    const body = JSON.parse(options.data);
+    requests.push(body.request);
+    let status = 200;
+    let response;
+    if (body.request === 'sync_v2_push') {
+      const pushed = body.payload.mutations[0];
+      pushedBases.push(pushed.base_revision);
+      pushedMutationIds.push(pushed.mutation_id);
+      if (pushedBases.length === 1) {
+        status = 409;
+        response = {
+          status: 'error',
+          code: 'base_revision_ahead',
+          message: 'A mutation base revision is ahead of the server.',
+          generation_id: 'new-generation',
+          current_revision: 1,
+          min_available_revision: 0
+        };
+      } else {
+        response = {
+          status: 'success',
+          generation_id: 'new-generation',
+          current_revision: 2,
+          results: [{
+            mutation_id: pushed.mutation_id,
+            status: 'applied',
+            revision: 2,
+            data: serverData
+          }]
+        };
+      }
+    } else if (body.request === 'sync_v2_snapshot') {
+      response = {
+        status: 'success',
+        session_id: 'base-repair-snapshot',
+        generation_id: 'new-generation',
+        snapshot_revision: 1,
+        records: [],
+        next_offset: 0,
+        has_more: false,
+        dataset_hash: emptyHash
+      };
+    } else if (body.request === 'sync_v2_pull') {
+      response = {
+        status: 'success',
+        generation_id: 'new-generation',
+        changes: [],
+        next_cursor: 2,
+        current_revision: 2,
+        min_available_revision: 0,
+        has_more: false,
+        dataset_hash: serverHash
+      };
+    } else {
+      throw new Error(`Unexpected request ${body.request}`);
+    }
+    options.onload({ status, responseText: JSON.stringify(response) });
+  };
+
+  await handler.syncPrivateV2(config, { generation_id: 'new-generation' });
+
+  assert.deepStrictEqual(requests, [
+    'sync_v2_push',
+    'sync_v2_snapshot',
+    'sync_v2_push',
+    'sync_v2_pull'
+  ]);
+  assert.deepStrictEqual(pushedBases, [7, 0]);
+  assert.strictEqual(pushedMutationIds[0], mutation.mutationId);
+  assert.strictEqual(pushedMutationIds[1], mutation.mutationId);
+  assert.strictEqual(await api.db.outbox.count(), 0);
+  assert.strictEqual(
+    (await api.db.shadows.get([config.profileId, 'product', 'B012345678'])).recordRevision,
+    2
+  );
+  assert.strictEqual(
+    (await api.db.products.get([config.profileId, 'B012345678'])).recordRevision,
+    2
+  );
+  assert.strictEqual((await api.db.syncState.get(config.profileId)).remoteDeleteRecovery, false);
 });
 
 test('canonical V2 dataset hashing is deterministic and excludes revisions', async () => {

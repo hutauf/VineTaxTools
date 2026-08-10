@@ -2791,6 +2791,61 @@ GM_addStyle(`
                   return staleInflight.length;
                 }
 
+                async rebaseAheadOutbox(config, currentRevision) {
+                  const normalizedCurrentRevision = Number(currentRevision);
+                  if (
+                    !Number.isSafeInteger(normalizedCurrentRevision)
+                    || normalizedCurrentRevision < 0
+                  ) {
+                    throw new Error('V2 server returned an invalid current revision for base-revision repair.');
+                  }
+                  await db.transaction(
+                    'rw',
+                    db.outbox,
+                    db.products,
+                    db.shadows,
+                    async () => {
+                      const pending = await db.outbox
+                        .where('[profileId+status]')
+                        .equals([config.profileId, 'pending'])
+                        .toArray();
+                      for (const mutation of pending) {
+                        const baseRevision = Number(mutation.baseRevision || 0);
+                        const shadow = await db.shadows.get([
+                          config.profileId,
+                          mutation.entityType,
+                          mutation.entityId
+                        ]);
+                        const serverRevision = Math.min(
+                          normalizedCurrentRevision,
+                          Math.max(0, Number(shadow?.recordRevision || 0))
+                        );
+                        const changes = {
+                          nextAttemptAt: 0,
+                          inflightAt: null
+                        };
+                        if (baseRevision > normalizedCurrentRevision) {
+                          changes.baseRevision = serverRevision;
+                          if (mutation.entityType === 'product') {
+                            const product = await db.products.get([
+                              config.profileId,
+                              mutation.entityId
+                            ]);
+                            if (product) {
+                              await db.products.put({
+                                ...product,
+                                recordRevision: serverRevision,
+                                updatedAt: Date.now()
+                              });
+                            }
+                          }
+                        }
+                        await db.outbox.update(mutation.mutationId, changes);
+                      }
+                    }
+                  );
+                }
+
                 async pushV2Outbox(config, generationId) {
                   await this.restoreStaleInflightOutbox(config.profileId);
 
@@ -3680,6 +3735,16 @@ GM_addStyle(`
                         }
 
                         if (preserveLocalRecovery && existing) {
+                          const recoveryRevision = Number(serverRecord?.recordRevision || 0);
+                          if (Number(existing.recordRevision || 0) !== recoveryRevision) {
+                            await db.products.put(createProductRow(
+                              config.profileId,
+                              asin,
+                              existing.data,
+                              recoveryRevision,
+                              serverRecord?.legacyLastUpdateTime ?? existing.data?.last_update_time
+                            ));
+                          }
                           continue;
                         }
 
@@ -3823,9 +3888,25 @@ GM_addStyle(`
                         const pullResult = await this.pullV2Changes(config, generationId);
                         return { ...pushResult, pull: pullResult };
                       } catch (error) {
-                        if (attempt > 0 || error.responseData?.code !== 'generation_mismatch') {
-                          throw error;
+                        const code = error.responseData?.code;
+                        if (attempt > 0) throw error;
+                        if (code === 'base_revision_ahead') {
+                          console.warn('VineTaxTools V2 mutation base is ahead of the server; repairing the local baseline.', {
+                            currentRevision: error.responseData?.current_revision,
+                            generationId
+                          });
+                          await this.replaceFromV2Snapshot(
+                            config,
+                            generationId,
+                            'base-revision-ahead'
+                          );
+                          await this.rebaseAheadOutbox(
+                            config,
+                            error.responseData?.current_revision
+                          );
+                          continue;
                         }
+                        if (code !== 'generation_mismatch') throw error;
                         console.warn('VineTaxTools server generation changed; refreshing capabilities.', {
                           previousGenerationId: generationId,
                           serverGenerationId: error.responseData?.generation_id || null
