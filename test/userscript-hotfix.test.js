@@ -1059,6 +1059,7 @@ test('V2 sync pushes a durable outbox and pulls even when startup has no product
   await api.updateStoredProduct('B012345678', () => ({
     name: 'Offline edit',
     etv: 12.5,
+    usageStatus: ['verkauft'],
     unknown_client_field: { kept: true }
   }), { createIfMissing: true });
 
@@ -1083,7 +1084,9 @@ test('V2 sync pushes a durable outbox and pulls even when startup has no product
         protocol_version: 2,
         generation_id: 'generation-1',
         current_revision: 0,
-        dataset_hash: emptyHash
+        dataset_hash: emptyHash,
+        features: { push_pull_exchange: true, authoritative_status_fields: true },
+        limits: { pull_changes: 500 }
       };
     } else if (body.request === 'sync_v2_snapshot') {
       response = {
@@ -1099,16 +1102,14 @@ test('V2 sync pushes a durable outbox and pulls even when startup has no product
     } else if (body.request === 'sync_v2_push') {
       response = {
         status: 'success',
+        generation_id: 'generation-1',
+        current_revision: 1,
         results: body.payload.mutations.map(mutation => ({
           mutation_id: mutation.mutation_id,
           status: 'applied',
           revision: 1,
           data: serverData
-        }))
-      };
-    } else if (body.request === 'sync_v2_pull') {
-      response = {
-        status: 'success',
+        })),
         changes: [{
           revision: 1,
           entity_type: 'product',
@@ -1120,8 +1121,9 @@ test('V2 sync pushes a durable outbox and pulls even when startup has no product
           record_revision: 1
         }],
         next_cursor: 1,
+        min_available_revision: 0,
         has_more: false,
-        dataset_hash: datasetHash
+        dataset_hash: null
       };
     } else {
       throw new Error(`Unexpected request ${body.request}`);
@@ -1135,9 +1137,12 @@ test('V2 sync pushes a durable outbox and pulls even when startup has no product
   assert.deepStrictEqual(requests.map(item => item.request), [
     'get_capabilities_v2',
     'sync_v2_snapshot',
-    'sync_v2_push',
-    'sync_v2_pull'
+    'sync_v2_push'
   ]);
+  const pushRequest = requests.find(item => item.request === 'sync_v2_push');
+  assert.strictEqual(pushRequest.payload.pull_since, 0);
+  assert.strictEqual(pushRequest.payload.mutations[0].authoritative_fields.includes('usageStatus'), true);
+  assert.strictEqual(pushRequest.payload.mutations[0].authoritative_fields.includes('verkauft'), true);
   assert.strictEqual(result.privateSync, true);
   assert.strictEqual(await api.db.outbox.count(), 0);
   assert.strictEqual(shadow.recordRevision, 1);
@@ -1381,6 +1386,9 @@ test('V2 serializes two edits of one ASIN without creating a self-conflict', asy
   assert.strictEqual(coalesced.length, 1);
   assert.strictEqual(coalesced[0].mutationId, firstMutation.mutationId);
   assert.strictEqual(coalesced[0].set.name, 'Second local edit');
+  // Even a corrupt/future local creation time must never produce a negative
+  // age on the wire.
+  await api.db.outbox.update(coalesced[0].mutationId, { createdAt: Date.now() + 60_000 });
 
   const config = await handler.getPrivateConfig();
   const wireMutations = [];
@@ -1404,6 +1412,8 @@ test('V2 serializes two edits of one ASIN without creating a self-conflict', asy
   assert.strictEqual(result.pushed, 1);
   assert.strictEqual(wireMutations.length, 1);
   assert.strictEqual(wireMutations[0].set.name, 'Second local edit');
+  assert.strictEqual(Number.isSafeInteger(wireMutations[0].intent_age_ms), true);
+  assert.strictEqual(wireMutations[0].intent_age_ms, 0);
 });
 
 test('an edit made during an in-flight V2 request is sent later with the confirmed base revision', async () => {
@@ -1518,7 +1528,7 @@ test('a committed push acknowledgement advances shadow and base revision even wh
   assert.deepStrictEqual(secondMutation.set, { name: 'Second local edit' });
 });
 
-test('V2 nested same-field conflicts stay local until the user chooses a side', async () => {
+test('V2 rejected mutations are discarded without creating unresolved conflicts', async () => {
   const { api, context } = await loadUserscript();
   const handler = new api.PrivateBackendHandler();
   await api.setValue('token', 'conflict-test-token');
@@ -1553,19 +1563,13 @@ test('V2 nested same-field conflicts stay local until the user chooses a side', 
   const pushResult = await handler.pushV2Outbox(config, 'generation-1');
   const conflicts = await api.db.conflicts.where('[profileId+status]').equals([config.profileId, 'open']).toArray();
 
-  assert.strictEqual(pushResult.conflicts, 1);
+  assert.strictEqual(pushResult.rejected, 1);
   assert.strictEqual(await api.db.outbox.count(), 0);
-  assert.deepStrictEqual(conflicts[0].conflictFields, ['name']);
-  assert.strictEqual(conflicts[0].serverRevision, 7);
+  assert.strictEqual(conflicts.length, 0);
   assert.strictEqual((await api.getValue('ASIN_B012345678')).includes('Local name'), true);
-
-  await handler.resolveV2Conflict(conflicts[0].id, 'server');
-  const resolved = JSON.parse(await api.getValue('ASIN_B012345678'));
-  assert.strictEqual(resolved.name, 'Server name');
-  assert.strictEqual(resolved.unknown_server_field, 42);
 });
 
-test('conflict then repair snapshot then local resolution keeps the preserved local intent', async () => {
+test('a repair snapshot after rejection replaces the local intent with server state', async () => {
   const { api, context } = await loadUserscript();
   const handler = new api.PrivateBackendHandler();
   await api.setValue('token', 'conflict-snapshot-token');
@@ -1600,11 +1604,6 @@ test('conflict then repair snapshot then local resolution keeps the preserved lo
     })
   });
   await handler.pushV2Outbox(config, 'generation-1');
-  const [conflict] = await api.db.conflicts
-    .where('[profileId+status]')
-    .equals([config.profileId, 'open'])
-    .toArray();
-
   const snapshotData = { ...conflictedServer, server_after_snapshot: 'preserve me' };
   const snapshotHash = await api.sha256Hex(api.canonicalizeJson([{
     entity_type: 'product', entity_id: 'B012345678', data: snapshotData
@@ -1621,19 +1620,14 @@ test('conflict then repair snapshot then local resolution keeps the preserved lo
     })
   });
   await handler.replaceFromV2Snapshot(config, 'generation-1', 'hash-mismatch');
-  assert.strictEqual(JSON.parse(await api.getValue('ASIN_B012345678')).name, 'Local choice');
-
-  await handler.resolveV2Conflict(conflict.id, 'local');
-  const [rebased] = await api.db.outbox.toArray();
-  assert.strictEqual(rebased.baseRevision, 7);
-  assert.deepStrictEqual(rebased.set, { name: 'Local choice' });
-  assert.deepStrictEqual(rebased.unset, []);
   const local = JSON.parse(await api.getValue('ASIN_B012345678'));
-  assert.strictEqual(local.name, 'Local choice');
+  assert.strictEqual(local.name, 'Server choice');
   assert.strictEqual(local.server_after_snapshot, 'preserve me');
+  assert.strictEqual(await api.db.conflicts.count(), 0);
+  assert.strictEqual(await api.db.outbox.count(), 0);
 });
 
-test('V2 tombstone conflicts rebase an intentional local recreate to the tombstone revision', async () => {
+test('V2 tombstone rejections are discarded without offering a local recreate conflict', async () => {
   const { api, context } = await loadUserscript();
   const handler = new api.PrivateBackendHandler();
   await api.setValue('token', 'tombstone-conflict-token');
@@ -1659,15 +1653,8 @@ test('V2 tombstone conflicts rebase an intentional local recreate to the tombsto
   });
 
   await handler.pushV2Outbox(config, 'generation-1');
-  const conflict = (await api.db.conflicts.toArray())[0];
-  assert.strictEqual(conflict.serverRevision, 6);
-  assert.strictEqual(conflict.serverDeleted, true);
-
-  await handler.resolveV2Conflict(conflict.id, 'local');
-  const recreate = (await api.db.outbox.toArray())[0];
-  assert.strictEqual(recreate.baseRevision, 6);
-  assert.strictEqual(recreate.operation, 'patch');
-  assert.strictEqual(recreate.set.name, 'Recreate locally');
+  assert.strictEqual(await api.db.conflicts.count(), 0);
+  assert.strictEqual(await api.db.outbox.count(), 0);
 });
 
 test('a pulled remote delete with a pending local edit becomes a revision-safe conflict', async () => {
@@ -2024,7 +2011,7 @@ test('HTTP 409 cursor expiry repairs by snapshot and restarts one expired snapsh
   assert.strictEqual(JSON.parse(await api.getValue('ASIN_B012345678')).unknown_after_expiry, true);
 });
 
-test('generation reset retains local recovery data without silently requeueing it', async () => {
+test('generation reset exactly replaces local recovery data with server state', async () => {
   const { api, context } = await loadUserscript();
   const handler = new api.PrivateBackendHandler();
   await api.setValue('token', 'generation-reset-token');
@@ -2065,12 +2052,13 @@ test('generation reset retains local recovery data without silently requeueing i
   await handler.syncPrivateV2(config, { generation_id: 'new-generation' });
 
   assert.deepStrictEqual(requests, ['sync_v2_snapshot', 'sync_v2_pull']);
-  assert.strictEqual(JSON.parse(await api.getValue('ASIN_B012345678')).name, 'Local recovery copy');
+  assert.strictEqual(await api.getValue('ASIN_B012345678'), null);
   assert.strictEqual(await api.db.outbox.count(), 0);
+  assert.strictEqual(await api.db.conflicts.count(), 0);
   assert.strictEqual((await api.db.syncState.get(config.profileId)).generationId, 'new-generation');
 });
 
-test('stale cached generation refreshes immediately and quarantines pending writes', async () => {
+test('stale cached generation refreshes immediately and lets the server snapshot win', async () => {
   const { api, context } = await loadUserscript();
   const handler = new api.PrivateBackendHandler();
   await api.setValue('token', 'stale-generation-token');
@@ -2163,19 +2151,9 @@ test('stale cached generation refreshes immediately and quarantines pending writ
     'sync_v2_snapshot',
     'sync_v2_pull'
   ]);
-  assert.strictEqual(conflicts.length, 1);
-  assert.strictEqual(conflicts[0].kind, 'generation-reset-with-local-change');
-  assert.strictEqual(conflicts[0].mutations[0].mutationId, originalMutation.mutationId);
-  assert.strictEqual(conflicts[0].mutations[0].attempts, 1);
+  assert.strictEqual(conflicts.length, 0);
   assert.strictEqual(await api.db.outbox.count(), 0);
-  assert.strictEqual(JSON.parse(await api.getValue('ASIN_B012345678')).name, 'Unsynced local name');
-
-  await handler.resolveV2Conflict(conflicts[0].id, 'local');
-  const rebased = (await api.db.outbox.toArray())[0];
-  assert.strictEqual(rebased.baseRevision, 1);
-  assert.strictEqual(rebased.set.name, 'Unsynced local name');
-  assert.strictEqual(rebased.set.unknown_local, true);
-  assert.deepStrictEqual(rebased.unset, []);
+  assert.strictEqual(JSON.parse(await api.getValue('ASIN_B012345678')).name, 'Restored server name');
   assert.strictEqual(JSON.parse(await api.getValue('ASIN_B012345678')).unknown_server, true);
 });
 
@@ -2617,6 +2595,11 @@ test('seven-step sync feedback stays inside the progress bar', async () => {
   api.setAutomaticSyncStep(7, 'Server nicht erreichbar.', 1, 'error');
   assert.strictEqual(progress.percentage, 100);
   assert.strictEqual(progress.state, 'error');
+
+  assert.match(userscriptSource, /Server-Synchronisierung läuft .*Bitte diese Vine-Seite noch geöffnet lassen/);
+  assert.match(userscriptSource, /Alles synchronisiert .*Server-Revision/);
+  assert.match(userscriptSource, /Hintergrund-Synchronisierung läuft .*Server-Vollstand wird geprüft/);
+  assert.match(userscriptSource, /pending: \['#d5a72e'/);
 });
 
 test('validation rejects unsafe backend names/import keys and HTML is escaped', async () => {

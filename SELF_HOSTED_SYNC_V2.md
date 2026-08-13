@@ -54,10 +54,50 @@ Neue Clients erkennen V2 mit `get_capabilities_v2` und verwenden anschließend:
 - `sync_v2_snapshot` für einen konsistent paginierten Vollstand.
 
 Der Server führt verschiedene Felder desselben Datensatzes automatisch
-zusammen. Änderungen desselben Felds nach der Basisrevision werden als
-Konflikt zurückgegeben. Eine `mutation_id` kann sicher wiederholt, aber niemals
-für andere Inhalte wiederverwendet werden. Token, ASINs und Produktobjekte
-werden nicht protokolliert.
+zusammen. Produktänderungen sind konfliktfrei; pro Feld gewinnt der jüngste
+Benutzer-Intent. Der Client sendet dafür bei jedem Versuch `intent_age_ms`,
+also das nichtnegative Alter des dauerhaft gespeicherten Outbox-Eintrags. Der
+Server normalisiert dies mit `Empfangszeit - Alter` auf seine eigene Uhr. Trifft
+eine Änderung bereits exakt den vorhandenen Produktzustand, wird sie als
+`noop` bestätigt und erzeugt keine Revision. Einzelne Produktdatensätze können über
+V2 nicht gelöscht werden; eine Stornierung bleibt ein normaler Statuswechsel.
+Die generischen Entitätstypen `storage_location` und `procedure_doc` behalten
+ihre feldbasierte Konflikterkennung. Eine `mutation_id` kann sicher wiederholt,
+aber niemals für andere Inhalte wiederverwendet werden. Token, ASINs und
+Produktobjekte werden nicht protokolliert.
+
+### V2.1-Performance-Erweiterung
+
+V2.1 erweitert denselben `protocol_version: 2`-Vertrag abwärtskompatibel:
+
+- `get_capabilities_v2` liest keinen vollständigen Datensatz und berechnet
+  keinen Dataset-Hash mehr. Der Request liefert nur konstante Protokoll- und
+  Revisionsmetadaten.
+- `sync_v2_push` kann mit `pull_since`, `pull_limit` und `entity_types` zugleich
+  die seit dem Client-Cursor fehlenden Änderungen anfordern. Die Antwort
+  enthält dann Mutationsergebnisse und die erste Change-Seite. Ein normaler
+  Statusklick benötigt dadurch nur einen HTTP-Request.
+- Alle Produktfelder folgen Last Write Wins anhand des rekonstruierten
+  Benutzerzeitpunkts. Dadurch kann eine zwei Wochen alte Offline-Änderung keine
+  jüngere Entscheidung eines anderen Clients überschreiben. Bei gleichem Alter
+  entscheidet deterministisch die spätere Serverannahme. Negative Alterswerte
+  sind ungültig; Clients begrenzen ihre Berechnung zusätzlich bei null. Das
+  volatile Alter wird bei Retries neu berechnet und ist deshalb bewusst nicht
+  Teil des Idempotenz-Hashes einer `mutation_id`. Die bisherigen
+  `authoritative_fields` für Statusfelder bleiben wire-kompatibel.
+- Sollte ein alter Server eine Produktmutation dennoch als Konflikt ablehnen,
+  verwirft der Client diesen Auftrag, arbeitet die übrige Outbox ab und ersetzt
+  anschließend seinen lokalen Zustand automatisch durch einen vollständigen
+  Server-Snapshot. Es bleiben keine manuell aufzulösenden Produktkonflikte.
+- Inkrementelle Pulls liefern den teuren Dataset-Hash nur noch auf explizite
+  Anfrage (`include_hash: true`). Die Clients laden stattdessen höchstens einmal
+  täglich und nur ohne offene Outbox einen vollständigen Integritäts-Snapshot
+  im Hintergrund.
+
+Alte V2-Clients ignorieren die neuen Capability-Features und funktionieren
+weiter. Deshalb wird zuerst das Backend ausgerollt und neu geladen; danach
+können Userscript und Produkt Manager unabhängig voneinander aktualisiert
+werden.
 
 ## Lokale Prüfung
 

@@ -19,7 +19,7 @@
 // @grant       GM_setClipboard
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.113000
+// @version     1.114100
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // ==/UserScript==
@@ -515,6 +515,19 @@ GM_addStyle(`
 
     #vine-data-extractor #simpleProgressBarContainer[data-state="error"] #simpleProgressText {
       color: #9f1239 !important;
+    }
+
+    #vine-data-extractor #simpleProgressBarContainer[data-state="pending"] {
+      border-color: #f59e0b !important;
+      background: #fffbeb !important;
+    }
+
+    #vine-data-extractor #simpleProgressBarContainer[data-state="pending"] #simpleProgressBarFill {
+      background: #fde68a !important;
+    }
+
+    #vine-data-extractor #simpleProgressBarContainer[data-state="pending"] #simpleProgressText {
+      color: #92400e !important;
     }
 
     #vine-data-extractor .vtt-disclosure {
@@ -1704,6 +1717,7 @@ GM_addStyle(`
                           set: desiredDiff.set,
                           unset: desiredDiff.unset,
                           source: options.source || 'local-edit',
+                          createdAt: Date.now(),
                           updatedAt: Date.now()
                         });
                         for (const duplicate of duplicates) await db.outbox.delete(duplicate.mutationId);
@@ -2609,6 +2623,7 @@ GM_addStyle(`
                   this.syncInFlight = null;
                   this.syncRequestRevision = 0;
                   this.syncLockOwnerId = createUuid();
+                  this.integritySnapshotScheduled = new Set();
                 }
 
                 enqueue(operation) {
@@ -2711,13 +2726,14 @@ GM_addStyle(`
                   if (
                     !force
                     && cached?.mode
+                    && cached.capabilityClientVersion === '1.114000'
                     && Date.now() - Number(cached.capabilityCheckedAt || 0) < 24 * 60 * 60 * 1000
                   ) {
                     return { mode: cached.mode, capabilities: cached.capabilities || null };
                   }
                   try {
                     const response = await this.postPrivate(config, 'get_capabilities_v2', {
-                      client: { name: 'VineTaxTools', version: '1.113000' },
+                      client: { name: 'VineTaxTools', version: '1.114000' },
                       supported_protocols: [2, 1],
                       entity_types: ['product']
                     });
@@ -2732,7 +2748,8 @@ GM_addStyle(`
                       mode: 'v2',
                       capabilities,
                       generationId: previous.generationId || capabilities.generation_id || capabilities.generationId,
-                      capabilityCheckedAt: Date.now()
+                      capabilityCheckedAt: Date.now(),
+                      capabilityClientVersion: '1.114000'
                     });
                     return { mode: 'v2', capabilities };
                   } catch (error) {
@@ -2745,6 +2762,7 @@ GM_addStyle(`
                       profileId: config.profileId,
                       mode: 'v1',
                       capabilityCheckedAt: Date.now(),
+                      capabilityClientVersion: '1.114000',
                       legacyNoticePending: true
                     });
                     return { mode: 'v1', capabilities: null };
@@ -2846,11 +2864,13 @@ GM_addStyle(`
                   );
                 }
 
-                async pushV2Outbox(config, generationId) {
+                async pushV2Outbox(config, generationId, capabilities = {}) {
                   await this.restoreStaleInflightOutbox(config.profileId);
 
                   let pushed = 0;
-                  let conflicts = 0;
+                  let rejected = 0;
+                  let exchanged = false;
+                  const supportsExchange = capabilities.features?.push_pull_exchange === true;
                   while (true) {
                     const allPending = (await db.outbox
                       .where('[profileId+status]')
@@ -2880,21 +2900,51 @@ GM_addStyle(`
                       }
                     });
                     const clientId = await this.getClientId(config.profileId);
+                    const stateBeforeExchange = await db.syncState.get(config.profileId) || {
+                      profileId: config.profileId,
+                      cursor: 0,
+                      generationId
+                    };
                     let response;
                     try {
                       response = await this.postPrivate(config, 'sync_v2_push', {
                         generation_id: generationId,
                         client_id: clientId,
-                        mutations: batch.map(mutation => ({
-                          mutation_id: mutation.mutationId,
-                          client_id: clientId,
-                          entity_type: mutation.entityType,
-                          entity_id: mutation.entityId,
-                          base_revision: mutation.baseRevision,
-                          operation: mutation.operation,
-                          set: mutation.set,
-                          unset: mutation.unset
-                        }))
+                        ...(supportsExchange ? {
+                          pull_since: Number(stateBeforeExchange.cursor || 0),
+                          pull_limit: Number(capabilities.limits?.pull_changes || 500),
+                          entity_types: ['product']
+                        } : {}),
+                        mutations: batch.map(mutation => {
+                          const authoritativeStatusFields = new Set([
+                            'usageStatus', 'verkauft', 'lager', 'entsorgt',
+                            'storniert', 'betriebsausgabe'
+                          ]);
+                          const authoritativeFields = capabilities.features?.authoritative_status_fields === true
+                            && mutation.entityType === 'product'
+                            ? [...new Set([
+                                ...Object.keys(mutation.set || {}),
+                                ...(mutation.unset || [])
+                              ])].filter(field => authoritativeStatusFields.has(field))
+                            : [];
+                          return {
+                            mutation_id: mutation.mutationId,
+                            client_id: clientId,
+                            entity_type: mutation.entityType,
+                            entity_id: mutation.entityId,
+                            base_revision: mutation.baseRevision,
+                            operation: mutation.operation,
+                            intent_age_ms: Math.max(
+                              0,
+                              Date.now() - Number(mutation.createdAt || Date.now())
+                            ),
+                            set: mutation.set,
+                            unset: mutation.unset,
+                            ...(authoritativeFields.length > 0
+                              ? { authoritative_fields: authoritativeFields }
+                              : {})
+                          };
+                        })
                       });
                     } catch (error) {
                       if (error.responseData?.code === 'generation_mismatch') {
@@ -3044,54 +3094,12 @@ GM_addStyle(`
                           }
                           pushed++;
                         } else if (result.status === 'conflict') {
-                          const conflict = result.conflict || {};
-                          const conflictFields = conflict.fields && typeof conflict.fields === 'object'
-                            ? Object.keys(conflict.fields)
-                            : result.conflict_fields || result.conflictFields || [];
-                          const conflictFieldRevision = Math.max(
-                            0,
-                            ...Object.values(conflict.fields || {}).map(field => (
-                              Number(field?.server_revision || field?.serverRevision || 0)
-                            ))
-                          );
+                          // A current V2.1 server never conflicts product
+                          // patches. For an older server, discard this stale
+                          // intent and replace local state from a verified
+                          // server snapshot after the remaining outbox drains.
                           await db.outbox.delete(mutation.mutationId);
-                          const laterMutations = await db.outbox
-                            .where('[profileId+entityType+entityId]')
-                            .equals([config.profileId, mutation.entityType, mutation.entityId])
-                            .toArray();
-                          for (const later of laterMutations.filter(item => item.status === 'pending')) {
-                            await db.outbox.update(later.mutationId, { status: 'blocked' });
-                          }
-                          const localRow = mutation.entityType === 'product'
-                            ? await db.products.get([config.profileId, mutation.entityId])
-                            : null;
-                          await db.conflicts.put({
-                            id: `${config.profileId}:${mutation.entityType}:${mutation.entityId}:${mutation.mutationId}`,
-                            profileId: config.profileId,
-                            entityType: mutation.entityType,
-                            entityId: mutation.entityId,
-                            mutation,
-                            conflictFields,
-                            conflictDetails: conflict.fields || null,
-                            serverRecord: conflict.server_data
-                              || result.server_record
-                              || result.serverRecord
-                              || null,
-                            serverRevision: Number(
-                              conflict.server_revision
-                              ?? conflict.serverRevision
-                              ?? result.record_revision
-                              ?? result.recordRevision
-                              ?? conflictFieldRevision
-                            ) || conflictFieldRevision,
-                            serverDeleted: conflict.server_data == null
-                              && result.server_record == null
-                              && result.serverRecord == null,
-                            localRecord: localRow?.data || null,
-                            status: 'open',
-                            createdAt: Date.now()
-                          });
-                          conflicts++;
+                          rejected++;
                         } else {
                           await db.outbox.update(mutation.mutationId, {
                             status: 'pending',
@@ -3106,8 +3114,26 @@ GM_addStyle(`
                     if (incompleteResponse) {
                       throw new Error('V2 server returned an incomplete mutation acknowledgement.');
                     }
+                    if (supportsExchange) {
+                      const data = response.data || response;
+                      if (
+                        !Array.isArray(data.changes)
+                        || !Number.isSafeInteger(Number(data.next_cursor ?? data.nextCursor))
+                        || typeof (data.has_more ?? data.hasMore) !== 'boolean'
+                      ) {
+                        throw new Error('V2.1 server advertised exchange support but returned no valid change page.');
+                      }
+                      const applied = await this.applyV2PullPage(
+                        config,
+                        generationId,
+                        stateBeforeExchange,
+                        data
+                      );
+                      exchanged = true;
+                      if (applied.hasMore) await this.pullV2Changes(config, generationId);
+                    }
                   }
-                  return { pushed, conflicts };
+                  return { pushed, rejected, exchanged };
                 }
 
                 async getClientId(profileId) {
@@ -3283,6 +3309,57 @@ GM_addStyle(`
                   });
                 }
 
+                async applyV2PullPage(config, generationId, previousState, data) {
+                  const responseGeneration = data.generation_id || data.generationId;
+                  if (responseGeneration && responseGeneration !== generationId) {
+                    const error = new Error('V2 change page belongs to a different server generation.');
+                    error.responseData = {
+                      code: 'generation_mismatch',
+                      snapshot_required: true,
+                      generation_id: responseGeneration
+                    };
+                    throw error;
+                  }
+                  const previousCursor = Number(previousState?.cursor || 0);
+                  const nextCursor = Number(data.next_cursor ?? data.nextCursor ?? previousCursor);
+                  const hasMore = Boolean(data.has_more ?? data.hasMore);
+                  if (
+                    !Number.isSafeInteger(nextCursor)
+                    || nextCursor < previousCursor
+                    || (hasMore && nextCursor <= previousCursor)
+                  ) {
+                    const error = new Error('V2 change page did not advance its cursor safely.');
+                    error.responseData = { code: 'cursor_ahead', snapshot_required: true };
+                    throw error;
+                  }
+                  if ((data.changes || []).some(change => change.operation === 'dataset_reset')) {
+                    const error = new Error('V2 dataset was reset.');
+                    error.responseData = {
+                      code: 'generation_mismatch',
+                      snapshot_required: true,
+                      generation_id: responseGeneration || generationId
+                    };
+                    throw error;
+                  }
+                  for (const change of data.changes || []) {
+                    await this.applyV2Change(config.profileId, change);
+                  }
+                  const state = {
+                    ...(previousState || {}),
+                    profileId: config.profileId,
+                    mode: 'v2',
+                    generationId,
+                    cursor: nextCursor,
+                    lastPullAt: Date.now()
+                  };
+                  await db.syncState.put(state);
+                  return {
+                    state,
+                    hasMore,
+                    expectedHash: data.dataset_hash || data.datasetHash || null
+                  };
+                }
+
                 async replaceFromV2Snapshot(
                   config,
                   generationId,
@@ -3425,6 +3502,8 @@ GM_addStyle(`
                   }
 
                   const previousState = await db.syncState.get(config.profileId) || {};
+                  // The deliberate Danger-Zone delete is the sole exception:
+                  // it keeps a local recovery copy until the user edits again.
                   const preserveLocalRecovery = previousState.remoteDeleteRecovery === true;
                   await db.transaction(
                     'rw',
@@ -3444,6 +3523,11 @@ GM_addStyle(`
                         .equals([config.profileId, 'pending'])
                         .toArray())
                         .sort(compareOutboxMutationOrder);
+                      if (reason === 'generation-reset') {
+                        await db.outbox.where('profileId').equals(config.profileId).delete();
+                        await db.conflicts.where('profileId').equals(config.profileId).delete();
+                        pending = [];
+                      }
                       const snapshotByAsin = new Map(
                         records
                           .filter(record => record.entityType === 'product')
@@ -3576,84 +3660,6 @@ GM_addStyle(`
                             serverRecord.recordRevision,
                             localTimestamp
                           );
-                        }
-                      }
-
-                      if (reason === 'generation-reset' && pending.length > 0) {
-                        const grouped = new Map();
-                        for (const mutation of pending) {
-                          const key = `${mutation.entityType}:${mutation.entityId}`;
-                        const group = grouped.get(key) || [];
-                        group.push(mutation);
-                        grouped.set(key, group);
-                      }
-                      for (const mutations of grouped.values()) {
-                        const first = mutations[0];
-                          const serverRecord = records.find(record => (
-                            record.entityType === first.entityType
-                            && record.entityId === first.entityId
-                          ));
-                          const localRow = first.entityType === 'product'
-                            ? existingByAsin.get(first.entityId)
-                            : null;
-                          await db.conflicts.put({
-                            id: `${config.profileId}:${first.entityType}:${first.entityId}:generation-reset`,
-                            profileId: config.profileId,
-                            entityType: first.entityType,
-                            entityId: first.entityId,
-                            mutation: mutations[mutations.length - 1],
-                            mutations,
-                            conflictFields: [...new Set(mutations.flatMap(mutation => [
-                              ...Object.keys(mutation.set || {}),
-                              ...(mutation.unset || [])
-                            ]))].sort(),
-                            serverRecord: serverRecord?.data || null,
-                            serverRevision: serverRecord?.recordRevision || 0,
-                            serverDeleted: !serverRecord,
-                            localRecord: localRow?.data ?? null,
-                            status: 'open',
-                            kind: 'generation-reset-with-local-change',
-                            createdAt: Date.now()
-                          });
-                          for (const mutation of mutations) {
-                            await db.outbox.delete(mutation.mutationId);
-                          }
-                        }
-                        pending = [];
-                      }
-
-                      if (reason === 'generation-reset' && !preserveLocalRecovery) {
-                        const currentOpenConflicts = (await db.conflicts
-                          .where('[profileId+status]')
-                          .equals([config.profileId, 'open'])
-                          .toArray())
-                          .filter(conflict => conflict.entityType === 'product');
-                        const alreadyProtected = new Set(
-                          currentOpenConflicts.map(conflict => conflict.entityId)
-                        );
-                        for (const existing of existingProducts) {
-                          if (alreadyProtected.has(existing.asin)) continue;
-                          const serverRecord = records.find(record => (
-                            record.entityType === 'product'
-                            && record.entityId === existing.asin
-                          ));
-                          const unchanged = serverRecord
-                            && canonicalizeJson(serverRecord.data) === canonicalizeJson(existing.data);
-                          if (unchanged) continue;
-                          await db.conflicts.put({
-                            id: `${config.profileId}:product:${existing.asin}:generation-reset-recovery`,
-                            profileId: config.profileId,
-                            entityType: 'product',
-                            entityId: existing.asin,
-                            conflictFields: ['__generation__'],
-                            serverRecord: serverRecord ? structuredCloneSafe(serverRecord.data) : null,
-                            serverRevision: serverRecord?.recordRevision || 0,
-                            serverDeleted: !serverRecord,
-                            localRecord: structuredCloneSafe(existing.data),
-                            status: 'open',
-                            kind: 'generation-reset-local-recovery',
-                            createdAt: Date.now()
-                          });
                         }
                       }
 
@@ -3820,23 +3826,21 @@ GM_addStyle(`
                     if (data.snapshot_required || data.snapshotRequired) {
                       return this.replaceFromV2Snapshot(config, generationId, data.reason || 'cursor-reset');
                     }
-                    for (const change of data.changes || []) {
-                      await this.applyV2Change(config.profileId, change);
-                    }
-                    state = {
-                      ...state,
-                      profileId: config.profileId,
-                      mode: 'v2',
-                      generationId,
-                      cursor: Number(data.next_cursor ?? data.nextCursor ?? state.cursor ?? 0),
-                      lastPullAt: Date.now()
-                    };
-                    expectedHash = data.dataset_hash || data.datasetHash || expectedHash;
-                    await db.syncState.put(state);
-                    if (!data.has_more && !data.hasMore) break;
+                    const applied = await this.applyV2PullPage(config, generationId, state, data);
+                    state = applied.state;
+                    expectedHash = applied.expectedHash || expectedHash;
+                    if (!applied.hasMore) break;
                   }
-                  const actualHash = await this.getShadowDatasetHash(config.profileId);
-                  if (expectedHash && actualHash !== expectedHash) {
+                  if (expectedHash) {
+                    const actualHash = await this.getShadowDatasetHash(config.profileId);
+                    if (actualHash === expectedHash) {
+                      await db.syncState.put({
+                        ...state,
+                        lastHash: actualHash,
+                        lastHashVerifiedAt: Date.now()
+                      });
+                      return { cursor: state.cursor, hash: actualHash };
+                    }
                     console.warn('VineTaxTools V2 incremental hash mismatch; starting repair snapshot.', {
                       expectedHash,
                       actualHash,
@@ -3846,8 +3850,7 @@ GM_addStyle(`
                     updateBackendStatusText('Integritätsabweichung erkannt; vollständige Reparatur läuft …', 'error');
                     return this.replaceFromV2Snapshot(config, generationId, 'hash-mismatch');
                   }
-                  await db.syncState.put({ ...state, lastHash: actualHash, lastHashVerifiedAt: Date.now() });
-                  return { cursor: state.cursor, hash: actualHash };
+                  return { cursor: state.cursor, hash: null };
                 }
 
                 async syncPrivateV2(config, capabilities) {
@@ -3875,7 +3878,19 @@ GM_addStyle(`
                             cursor: Number(state?.cursor || 0)
                           });
                         }
-                        const pushResult = await this.pushV2Outbox(config, generationId);
+                        const pushResult = await this.pushV2Outbox(
+                          config,
+                          generationId,
+                          activeCapabilities
+                        );
+                        if (pushResult.rejected > 0) {
+                          const rejectedState = await db.syncState.get(config.profileId) || {};
+                          await db.syncState.put({
+                            ...rejectedState,
+                            profileId: config.profileId,
+                            serverRepairRequired: true
+                          });
+                        }
                         if (pushResult.pushed > 0) {
                           const refreshedState = await db.syncState.get(config.profileId) || {};
                           await db.syncState.put({
@@ -3885,7 +3900,62 @@ GM_addStyle(`
                             recoveryReleasedAt: Date.now()
                           });
                         }
-                        const pullResult = await this.pullV2Changes(config, generationId);
+                        let pullResult = pushResult.exchanged
+                          ? { cursor: (await db.syncState.get(config.profileId))?.cursor || 0, hash: null }
+                          : await this.pullV2Changes(config, generationId);
+                        const repairState = await db.syncState.get(config.profileId) || {};
+                        const oldConflictCount = await db.conflicts
+                          .where('[profileId+status]')
+                          .equals([config.profileId, 'open'])
+                          .count();
+                        if (oldConflictCount > 0) {
+                          // Pre-2.1 conflicts used to block every later local
+                          // mutation for the same product. Server state wins:
+                          // discard those obsolete intents before repairing.
+                          await db.transaction('rw', db.outbox, db.conflicts, async () => {
+                            const conflicts = await db.conflicts
+                              .where('[profileId+status]')
+                              .equals([config.profileId, 'open'])
+                              .toArray();
+                            const blockedEntities = new Set(conflicts.map(conflict => (
+                              `${conflict.entityType}\u0000${conflict.entityId}`
+                            )));
+                            const queued = await db.outbox
+                              .where('profileId')
+                              .equals(config.profileId)
+                              .toArray();
+                            for (const mutation of queued) {
+                              if (blockedEntities.has(`${mutation.entityType}\u0000${mutation.entityId}`)) {
+                                await db.outbox.delete(mutation.mutationId);
+                              }
+                            }
+                          });
+                        }
+                        const remainingOutbox = await db.outbox
+                          .where('profileId')
+                          .equals(config.profileId)
+                          .count();
+                        if (
+                          remainingOutbox === 0
+                          && (repairState.serverRepairRequired || oldConflictCount > 0)
+                        ) {
+                          await db.conflicts.where('profileId').equals(config.profileId).delete();
+                          await this.replaceFromV2Snapshot(
+                            config,
+                            generationId,
+                            'server-rejected-auto-repair'
+                          );
+                          pullResult = await this.pullV2Changes(config, generationId);
+                          const repairedState = await db.syncState.get(config.profileId) || {};
+                          await db.syncState.put({
+                            ...repairedState,
+                            profileId: config.profileId,
+                            serverRepairRequired: false
+                          });
+                        }
+                        void this.scheduleDailyIntegritySnapshot(config, generationId).catch(error => {
+                          console.warn('V2.1-Integritäts-Snapshot konnte nicht geplant werden:', error);
+                        });
                         return { ...pushResult, pull: pullResult };
                       } catch (error) {
                         const code = error.responseData?.code;
@@ -3906,6 +3976,14 @@ GM_addStyle(`
                           );
                           continue;
                         }
+                        if (error.responseData?.snapshot_required && code !== 'generation_mismatch') {
+                          await this.replaceFromV2Snapshot(
+                            config,
+                            error.responseData?.generation_id || generationId,
+                            code || 'cursor-reset'
+                          );
+                          continue;
+                        }
                         if (code !== 'generation_mismatch') throw error;
                         console.warn('VineTaxTools server generation changed; refreshing capabilities.', {
                           previousGenerationId: generationId,
@@ -3918,6 +3996,52 @@ GM_addStyle(`
                     }
                     throw new Error('V2 sync could not recover from a server generation change.');
                   });
+                }
+
+                async scheduleDailyIntegritySnapshot(config, generationId) {
+                  const oneDay = 24 * 60 * 60 * 1000;
+                  const state = await db.syncState.get(config.profileId);
+                  if (
+                    Date.now() - Number(state?.lastSnapshotAt || 0) < oneDay
+                    || this.integritySnapshotScheduled.has(config.profileId)
+                  ) return;
+                  this.integritySnapshotScheduled.add(config.profileId);
+                  const timer = setTimeout(() => {
+                    void this.enqueue(() => this.withCrossTabSyncLock(config.profileId, async () => {
+                      const currentState = await db.syncState.get(config.profileId);
+                      if (Date.now() - Number(currentState?.lastSnapshotAt || 0) < oneDay) return;
+                      const outboxCount = await db.outbox
+                        .where('profileId')
+                        .equals(config.profileId)
+                        .count();
+                      if (outboxCount > 0) return;
+                      setProgress(
+                        'Hintergrund-Synchronisierung läuft · Server-Vollstand wird geprüft …',
+                        null,
+                        'info'
+                      );
+                      await this.replaceFromV2Snapshot(
+                        config,
+                        currentState?.generationId || generationId,
+                        'daily-integrity'
+                      );
+                      await this.pullV2Changes(
+                        config,
+                        (await db.syncState.get(config.profileId))?.generationId || generationId
+                      );
+                      setProgress('Alles synchronisiert · Hintergrundprüfung abgeschlossen.', 100, 'success');
+                    })).catch(error => {
+                      console.warn('Täglicher V2.1-Integritäts-Snapshot wurde verschoben:', error);
+                      setProgress(
+                        'Hintergrundprüfung verschoben · normale Änderungen bleiben lokal gespeichert.',
+                        100,
+                        'pending'
+                      );
+                    }).finally(() => {
+                      this.integritySnapshotScheduled.delete(config.profileId);
+                    });
+                  }, 10_000);
+                  if (typeof timer?.unref === 'function') timer.unref();
                 }
 
                 async clearPrivateSyncMarkers(config) {
@@ -4349,6 +4473,11 @@ GM_addStyle(`
 
                 syncProducts(products) {
                   this.syncRequestRevision++;
+                  setProgress(
+                    'Server-Synchronisierung läuft … Bitte diese Vine-Seite noch geöffnet lassen.',
+                    null,
+                    'info'
+                  );
                   if (Array.isArray(products)) {
                     for (const product of products) {
                       const asin = normalizeAsin(product?.ASIN);
@@ -4385,7 +4514,45 @@ GM_addStyle(`
                           combinedError.errors = errors;
                           throw combinedError;
                         }
+                        const config = await this.getPrivateConfig();
+                        if (config) {
+                          const queued = await db.outbox
+                            .where('profileId')
+                            .equals(config.profileId)
+                            .count();
+                          if (queued > 0) {
+                            setProgress(
+                              `${queued} Änderung(en) sind noch lokal vorgemerkt. Die Synchronisierung wird erneut versucht.`,
+                              100,
+                              'pending'
+                            );
+                          } else {
+                            const state = await db.syncState.get(config.profileId);
+                            setProgress(
+                              `Alles synchronisiert · Server-Revision ${Number(state?.cursor || 0)}.`,
+                              100,
+                              'success'
+                            );
+                          }
+                        } else {
+                          setProgress(
+                            'Lokale Verarbeitung abgeschlossen · kein privates Backend eingerichtet.',
+                            100,
+                            'pending'
+                          );
+                        }
                         return result;
+                      } catch (error) {
+                        const config = await this.getPrivateConfig();
+                        const queued = config
+                          ? await db.outbox.where('profileId').equals(config.profileId).count()
+                          : 0;
+                        setProgress(
+                          `Synchronisierung fehlgeschlagen · ${queued} Änderung(en) bleiben sicher lokal gespeichert.`,
+                          100,
+                          'error'
+                        );
+                        throw error;
                       } finally {
                         this.syncInFlight = null;
                       }
@@ -4927,8 +5094,19 @@ GM_addStyle(`
                     progressBarContainer.setAttribute('aria-valuetext', text);
                   },
                   setState: (state) => {
-                    const safeState = ['info', 'success', 'error'].includes(state) ? state : 'info';
+                    const safeState = ['info', 'success', 'pending', 'error'].includes(state) ? state : 'info';
                     progressBarContainer.dataset.state = safeState;
+                    const palettes = {
+                      info: ['#6f8fbd', '#eef3f8', '#a9cdf5', '#17365d'],
+                      success: ['#86b89b', '#edf8f1', '#bfe3cc', '#175c35'],
+                      pending: ['#d5a72e', '#fff8df', '#f3d87a', '#6f4b00'],
+                      error: ['#d99a9a', '#fff1f1', '#efb3b3', '#8a1f1f']
+                    };
+                    const [border, background, fill, text] = palettes[safeState];
+                    progressBarContainer.style.borderColor = border;
+                    progressBarContainer.style.backgroundColor = background;
+                    progressBarFill.style.backgroundColor = fill;
+                    progressText.style.color = text;
                   },
                   hide: () => {
                     progressBarContainer.style.display = 'none';
@@ -5338,6 +5516,9 @@ GM_addStyle(`
                       let list = await load_all_asin_etv_values_from_storage({
                         automaticSyncStep: 2
                       });
+                      // IndexedDB is the primary UI source. Render it immediately;
+                      // the private backend refresh continues without blocking the dashboard.
+                      requestDashboardRefresh();
 
                       let syncError = null;
                       try {
@@ -6477,15 +6658,26 @@ async function createPieChart(list, parentElement) {
 
                 document.getElementById(checkbox.id).addEventListener('change', async (event) => {
                     const checked = event.target.checked;
-                    await updateStoredProduct(asin, current => {
-                      const usageStatus = new Set(current.usageStatus);
-                      if (checked) {
-                        usageStatus.add(checkbox.status);
-                      } else {
-                        usageStatus.delete(checkbox.status);
-                      }
-                      current.usageStatus = [...usageStatus];
+                    const updatedProduct = await updateStoredProduct(asin, current => {
+                      const hasDefekt = current.usageStatus.includes('defekt');
+                      current.usageStatus = checked
+                        ? [checkbox.status, ...(hasDefekt ? ['defekt'] : [])]
+                        : (hasDefekt ? ['defekt'] : []);
                     });
+                    if (checked) {
+                      for (const other of checkboxes) {
+                        if (other.id !== checkbox.id) {
+                          document.getElementById(other.id).checked = false;
+                        }
+                      }
+                    }
+                    if (updatedProduct) {
+                      try {
+                        await backendHandler.syncProducts([{ ...updatedProduct, ASIN: asin }]);
+                      } catch (error) {
+                        console.error('Immediate status sync failed; outbox remains durable:', error);
+                      }
+                    }
                     await requestDashboardRefresh();
                 });
             });
@@ -6493,19 +6685,33 @@ async function createPieChart(list, parentElement) {
             document.getElementById('angepasster-teilwert').addEventListener('change', async (event) => {
                 const input = event.target.value.trim().replace(',', '.');
                 if (input === '') {
-                    await updateStoredProduct(asin, current => {
+                    const updatedProduct = await updateStoredProduct(asin, current => {
                       current.myteilwert = null;
                       current.myTeilwert = null;
                     });
+                    if (updatedProduct) {
+                      try {
+                        await backendHandler.syncProducts([{ ...updatedProduct, ASIN: asin }]);
+                      } catch (error) {
+                        console.error('Immediate valuation sync failed; outbox remains durable:', error);
+                      }
+                    }
                     await requestDashboardRefresh();
                     return;
                 }
                 const value = Number(input);
                 if (Number.isFinite(value) && value >= 0) {
-                    await updateStoredProduct(asin, current => {
+                    const updatedProduct = await updateStoredProduct(asin, current => {
                       current.myteilwert = value;
                       current.myTeilwert = value;
                     });
+                    if (updatedProduct) {
+                      try {
+                        await backendHandler.syncProducts([{ ...updatedProduct, ASIN: asin }]);
+                      } catch (error) {
+                        console.error('Immediate valuation sync failed; outbox remains durable:', error);
+                      }
+                    }
                     await requestDashboardRefresh();
                 } else {
                     alert('Bitte einen gültigen, nicht negativen Teilwert eingeben.');

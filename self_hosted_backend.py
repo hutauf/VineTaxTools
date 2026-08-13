@@ -71,7 +71,7 @@ def connect_sqlite(path):
 # This marked block is intentionally self-contained.  The hosted backend has
 # an equivalent copy and parity tests compare its public protocol behaviour.
 
-SYNC_CORE_VERSION = "2.0.0"
+SYNC_CORE_VERSION = "2.1.0"
 SYNC_SCHEMA_VERSION = 2
 SYNC_MIGRATION_CHECKSUM = hashlib.sha256(
     b"self-hosted-vine-sync-schema-v2-2026-07-31-known-fields-2"
@@ -80,6 +80,10 @@ CANONICALIZATION_VERSION = "jcs-rfc8785-v1"
 HASH_ALGORITHM = "sha256"
 MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 SUPPORTED_ENTITY_TYPES = ("product", "storage_location", "procedure_doc")
+AUTHORITATIVE_PRODUCT_FIELDS = {
+    "usageStatus", "verkauft", "lager", "entsorgt", "storniert",
+    "betriebsausgabe",
+}
 MAX_PUSH_MUTATIONS = 100
 MAX_PULL_CHANGES = 500
 MAX_SNAPSHOT_RECORDS = 500
@@ -315,6 +319,7 @@ def _schema_sql():
             entity_id TEXT NOT NULL,
             field_name TEXT NOT NULL,
             revision INTEGER NOT NULL,
+            intent_timestamp_ms INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (entity_type, entity_id, field_name)
         );
         CREATE TABLE IF NOT EXISTS sync_changes (
@@ -834,17 +839,37 @@ def _record_change(cursor, revision, generation_id, entity_type, entity_id,
     )
 
 
-def _update_field_revisions(cursor, entity_type, entity_id, fields, revision):
+def _update_field_revisions(
+    cursor, entity_type, entity_id, fields, revision, intent_timestamp_ms=0
+):
     for field in fields:
         cursor.execute(
             """
             INSERT INTO field_revisions
-                (entity_type, entity_id, field_name, revision)
-            VALUES (?, ?, ?, ?)
+                (entity_type, entity_id, field_name, revision, intent_timestamp_ms)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(entity_type, entity_id, field_name)
-            DO UPDATE SET revision = excluded.revision
+            DO UPDATE SET
+                revision = excluded.revision,
+                intent_timestamp_ms = excluded.intent_timestamp_ms
             """,
-            (entity_type, entity_id, field, revision),
+            (entity_type, entity_id, field, revision, intent_timestamp_ms),
+        )
+
+
+def _update_field_intent_timestamps(
+    cursor, entity_type, entity_id, fields, revision, intent_timestamp_ms
+):
+    for field in fields:
+        cursor.execute(
+            """
+            INSERT INTO field_revisions
+                (entity_type, entity_id, field_name, revision, intent_timestamp_ms)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(entity_type, entity_id, field_name)
+            DO UPDATE SET intent_timestamp_ms = excluded.intent_timestamp_ms
+            """,
+            (entity_type, entity_id, field, revision, intent_timestamp_ms),
         )
 
 
@@ -1040,6 +1065,24 @@ def ensure_sync_schema(connection, token):
             if migration:
                 if migration["checksum"] != SYNC_MIGRATION_CHECKSUM:
                     raise sqlite3.DatabaseError("Sync schema checksum mismatch.")
+                columns = {
+                    row["name"] for row in cursor.execute(
+                        "PRAGMA table_info(field_revisions)"
+                    ).fetchall()
+                }
+                if "intent_timestamp_ms" not in columns:
+                    cursor.execute("BEGIN IMMEDIATE")
+                    columns = {
+                        row["name"] for row in cursor.execute(
+                            "PRAGMA table_info(field_revisions)"
+                        ).fetchall()
+                    }
+                    if "intent_timestamp_ms" not in columns:
+                        cursor.execute(
+                            "ALTER TABLE field_revisions ADD COLUMN "
+                            "intent_timestamp_ms INTEGER NOT NULL DEFAULT 0"
+                        )
+                    connection.commit()
                 return
         history_path = get_history_db_path(token)
         if os.path.exists(history_path) and os.path.getsize(history_path) > 0:
@@ -1256,9 +1299,23 @@ def _validate_mutation(raw, batch_client_id=None):
     operation = raw.get("operation")
     if operation not in {"patch", "delete"}:
         raise SyncProtocolError("operation must be 'patch' or 'delete'.")
+    if entity_type == "product" and operation == "delete":
+        raise SyncProtocolError(
+            "Product records cannot be deleted; use usageStatus 'storniert'."
+        )
+    intent_age_ms = raw.get("intent_age_ms")
+    if intent_age_ms is not None and (
+        not isinstance(intent_age_ms, int)
+        or isinstance(intent_age_ms, bool)
+        or not 0 <= intent_age_ms <= MAX_SAFE_JSON_INTEGER
+    ):
+        raise SyncProtocolError(
+            "intent_age_ms must be a non-negative safe integer."
+        )
     if operation == "patch":
         set_values = raw.get("set", {})
         unset_fields = raw.get("unset", [])
+        authoritative_fields = raw.get("authoritative_fields", [])
         if not isinstance(set_values, dict) or not all(
             isinstance(key, str) and key for key in set_values
         ):
@@ -1272,6 +1329,24 @@ def _validate_mutation(raw, batch_client_id=None):
         overlap = set(set_values) & set(unset_fields)
         if overlap:
             raise SyncProtocolError("A field cannot occur in both set and unset.")
+        if not isinstance(authoritative_fields, list) or not all(
+            isinstance(field, str) and field for field in authoritative_fields
+        ):
+            raise SyncProtocolError(
+                "authoritative_fields must be a list of non-empty field names."
+            )
+        if len(authoritative_fields) != len(set(authoritative_fields)):
+            raise SyncProtocolError("authoritative_fields must not contain duplicates.")
+        requested_fields = set(set_values) | set(unset_fields)
+        if not set(authoritative_fields) <= requested_fields:
+            raise SyncProtocolError(
+                "authoritative_fields must also occur in set or unset."
+            )
+        if authoritative_fields and (
+            entity_type != "product"
+            or not set(authoritative_fields) <= AUTHORITATIVE_PRODUCT_FIELDS
+        ):
+            raise SyncProtocolError("Only product status fields may be authoritative.")
     else:
         if raw.get("set") not in (None, {}):
             raise SyncProtocolError("A delete mutation cannot contain set values.")
@@ -1279,6 +1354,7 @@ def _validate_mutation(raw, batch_client_id=None):
             raise SyncProtocolError("A delete mutation cannot contain unset fields.")
         set_values = {}
         unset_fields = []
+        authoritative_fields = []
     normalized = {
         "mutation_id": mutation_id,
         "client_id": client_id,
@@ -1288,6 +1364,8 @@ def _validate_mutation(raw, batch_client_id=None):
         "operation": operation,
         "set": set_values,
         "unset": unset_fields,
+        "authoritative_fields": authoritative_fields,
+        "intent_age_ms": intent_age_ms,
     }
     # Validate all values now, before acquiring the write lock.
     canonical_json(normalized)
@@ -1295,7 +1373,10 @@ def _validate_mutation(raw, batch_client_id=None):
 
 
 def _receipt_hash(mutation):
-    return _sha256_json(mutation)
+    stable_mutation = {
+        key: value for key, value in mutation.items() if key != "intent_age_ms"
+    }
+    return _sha256_json(stable_mutation)
 
 
 def _stored_receipt(cursor, mutation):
@@ -1350,13 +1431,19 @@ def _field_revisions(cursor, entity_type, entity_id, fields):
     placeholders = ",".join("?" for _ in fields)
     rows = cursor.execute(
         f"""
-        SELECT field_name, revision FROM field_revisions
+        SELECT field_name, revision, intent_timestamp_ms FROM field_revisions
         WHERE entity_type = ? AND entity_id = ?
           AND field_name IN ({placeholders})
         """,
         (entity_type, entity_id, *fields),
     ).fetchall()
-    return {row["field_name"]: row["revision"] for row in rows}
+    return {
+        row["field_name"]: {
+            "revision": row["revision"],
+            "intent_timestamp_ms": row["intent_timestamp_ms"],
+        }
+        for row in rows
+    }
 
 
 def _apply_mutation(cursor, generation_id, mutation):
@@ -1435,7 +1522,12 @@ def _apply_mutation(cursor, generation_id, mutation):
         _store_receipt(cursor, mutation, generation_id, result)
         return result
 
-    if current and current["deleted"] and current_revision > mutation["base_revision"]:
+    if (
+        entity_type != "product"
+        and current
+        and current["deleted"]
+        and current_revision > mutation["base_revision"]
+    ):
         result = {
             "mutation_id": mutation["mutation_id"],
             "status": "conflict",
@@ -1460,8 +1552,30 @@ def _apply_mutation(cursor, generation_id, mutation):
     )
     revisions = _field_revisions(cursor, entity_type, entity_id, requested_fields)
     conflict_fields = {}
+    authoritative_fields = set(mutation.get("authoritative_fields", []))
+    intent_age_ms = mutation.get("intent_age_ms")
+    if entity_type == "product":
+        # The outbox age is measured from the user's local change to this
+        # attempt, then normalized onto the server clock. Legacy V2 clients
+        # without an age retain server-arrival semantics.
+        server_received_ms = int(time.time() * 1000)
+        intent_timestamp_ms = max(0, server_received_ms - (intent_age_ms or 0))
+        authoritative_fields = {
+            field for field in requested_fields
+            if intent_timestamp_ms >= revisions.get(field, {}).get(
+                "intent_timestamp_ms", 0
+            )
+        }
+    ignored_fields = sorted(
+        set(requested_fields) - authoritative_fields,
+        key=_utf16_sort_key,
+    ) if entity_type == "product" else []
     for field in requested_fields:
-        field_revision = revisions.get(field, 0)
+        if field in authoritative_fields:
+            continue
+        if entity_type == "product":
+            continue
+        field_revision = revisions.get(field, {}).get("revision", 0)
         if field_revision <= mutation["base_revision"]:
             continue
         if field in mutation["set"]:
@@ -1509,14 +1623,23 @@ def _apply_mutation(cursor, generation_id, mutation):
     effective_set = {}
     effective_unset = []
     for field, value in mutation["set"].items():
+        if entity_type == "product" and field not in authoritative_fields:
+            continue
         if field not in target or target[field] != value:
             target[field] = value
             effective_set[field] = value
     for field in mutation["unset"]:
+        if entity_type == "product" and field not in authoritative_fields:
+            continue
         if field in target:
             del target[field]
             effective_unset.append(field)
     if not effective_set and not effective_unset:
+        if entity_type == "product" and authoritative_fields:
+            _update_field_intent_timestamps(
+                cursor, entity_type, entity_id, authoritative_fields,
+                current_revision, intent_timestamp_ms,
+            )
         result = {
             "mutation_id": mutation["mutation_id"],
             "status": "noop",
@@ -1524,6 +1647,7 @@ def _apply_mutation(cursor, generation_id, mutation):
             "entity_id": entity_id,
             "revision": current_revision if current else mutation["base_revision"],
             "data": current_data,
+            "ignored_fields": ignored_fields,
         }
         _store_receipt(cursor, mutation, generation_id, result)
         return result
@@ -1542,7 +1666,14 @@ def _apply_mutation(cursor, generation_id, mutation):
         cursor, entity_type, entity_id,
         sorted(set(effective_set) | set(effective_unset), key=_utf16_sort_key),
         revision,
+        intent_timestamp_ms if entity_type == "product" else 0,
     )
+    if entity_type == "product":
+        unchanged_accepted = authoritative_fields - set(effective_set) - set(effective_unset)
+        _update_field_intent_timestamps(
+            cursor, entity_type, entity_id, unchanged_accepted,
+            revision, intent_timestamp_ms,
+        )
     _record_change(
         cursor, revision, generation_id, entity_type, entity_id, "upsert",
         effective_set, effective_unset, target,
@@ -1554,6 +1685,7 @@ def _apply_mutation(cursor, generation_id, mutation):
         "entity_id": entity_id,
         "revision": revision,
         "data": target,
+        "ignored_fields": ignored_fields,
     }
     _store_receipt(cursor, mutation, generation_id, result)
     return result
@@ -1618,13 +1750,67 @@ def sync_capabilities(connection, cursor, payload=None):
                 "pull_changes": MAX_PULL_CHANGES,
                 "snapshot_records": MAX_SNAPSHOT_RECORDS,
             },
-            "dataset_hash": dataset_hash(cursor, entity_types),
+            "features": {
+                "push_pull_exchange": True,
+                "on_demand_pull_hash": True,
+                "authoritative_status_fields": True,
+                "product_last_write_wins": True,
+                "product_intent_age_lww": True,
+                "product_delete_supported": False,
+            },
         }
         connection.commit()
         return body
     except Exception:
         connection.rollback()
         raise
+
+
+def _collect_sync_changes(cursor, cursor_value, limit, entity_types, include_hash=False):
+    """Collect one change-log page for pull or the V2.1 push exchange."""
+    meta = _meta(cursor)
+    placeholders = ",".join("?" for _ in entity_types)
+    rows = cursor.execute(
+        f"""
+        SELECT * FROM sync_changes
+        WHERE revision > ? AND revision <= ?
+          AND (entity_type IN ({placeholders}) OR operation = 'dataset_reset')
+        ORDER BY revision
+        LIMIT ?
+        """,
+        (cursor_value, meta["current_revision"], *entity_types, limit + 1),
+    ).fetchall()
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+    changes = []
+    for row in page_rows:
+        data = _safe_json_object(row["record_json"]) if row["record_json"] else None
+        changes.append({
+            "revision": row["revision"],
+            "entity_type": row["entity_type"],
+            "entity_id": row["entity_id"],
+            "operation": row["operation"],
+            "set": _safe_json_object(row["set_json"]),
+            "unset": json.loads(row["unset_json"]),
+            "data": data,
+        })
+    next_cursor = (
+        page_rows[-1]["revision"]
+        if has_more and page_rows else meta["current_revision"]
+    )
+    return {
+        "changes": changes,
+        "next_cursor": next_cursor,
+        "current_revision": meta["current_revision"],
+        "min_available_revision": meta["min_available_revision"],
+        "generation_id": meta["generation_id"],
+        "has_more": has_more,
+        "hash_entity_types": entity_types,
+        "dataset_hash": (
+            dataset_hash(cursor, entity_types)
+            if include_hash and not has_more else None
+        ),
+    }
 
 
 def sync_push(connection, cursor, payload):
@@ -1657,9 +1843,53 @@ def sync_push(connection, cursor, payload):
             "A push batch must not contain duplicate mutation IDs.",
             code="duplicate_mutation_id",
         )
+    pull_since = payload.get("pull_since")
+    pull_limit = payload.get("pull_limit", MAX_PULL_CHANGES)
+    if pull_since is not None:
+        if (
+            not isinstance(pull_since, int)
+            or isinstance(pull_since, bool)
+            or pull_since < 0
+        ):
+            raise SyncProtocolError(
+                "pull_since must be a non-negative integer.", code="invalid_cursor"
+            )
+        if (
+            not isinstance(pull_limit, int)
+            or isinstance(pull_limit, bool)
+            or not 1 <= pull_limit <= MAX_PULL_CHANGES
+        ):
+            raise SyncProtocolError(
+                f"pull_limit must be between 1 and {MAX_PULL_CHANGES}.",
+                code="invalid_limit",
+            )
+        try:
+            pull_entity_types = _validate_entity_types(payload.get("entity_types"))
+        except SyncProtocolError as error:
+            error.code = "invalid_payload"
+            raise
+    else:
+        pull_entity_types = None
     try:
         cursor.execute("BEGIN IMMEDIATE")
         meta = _validate_generation(cursor, payload.get("generation_id"))
+        if pull_since is not None:
+            if pull_since < meta["min_available_revision"]:
+                raise SyncProtocolError(
+                    "The requested cursor is no longer available.",
+                    status=409, code="cursor_expired", snapshot_required=True,
+                    min_available_revision=meta["min_available_revision"],
+                    generation_id=meta["generation_id"],
+                    current_revision=meta["current_revision"],
+                )
+            if pull_since > meta["current_revision"]:
+                raise SyncProtocolError(
+                    "The requested cursor is ahead of the server.",
+                    status=409, code="cursor_ahead", snapshot_required=True,
+                    min_available_revision=meta["min_available_revision"],
+                    generation_id=meta["generation_id"],
+                    current_revision=meta["current_revision"],
+                )
         if any(
             mutation["base_revision"] > meta["current_revision"]
             for mutation in mutations
@@ -1685,12 +1915,21 @@ def sync_push(connection, cursor, payload):
     except Exception:
         connection.rollback()
         raise
-    return {
+    body = {
         "status": "success",
         "generation_id": meta["generation_id"],
         "current_revision": current_revision,
         "results": results,
     }
+    if pull_since is not None:
+        body.update(_collect_sync_changes(
+            cursor,
+            pull_since,
+            pull_limit,
+            pull_entity_types,
+            include_hash=False,
+        ))
+    return body
 
 
 def sync_pull(connection, cursor, payload):
@@ -1732,46 +1971,16 @@ def sync_pull(connection, cursor, payload):
     except SyncProtocolError as error:
         error.code = "invalid_payload"
         raise
-    selected = set(entity_types)
-    rows = cursor.execute(
-        """
-        SELECT * FROM sync_changes
-        WHERE revision > ? AND revision <= ? ORDER BY revision
-        """,
-        (cursor_value, meta["current_revision"]),
-    ).fetchall()
-    changes = []
-    next_cursor = cursor_value
-    for row in rows:
-        next_cursor = row["revision"]
-        if row["entity_type"] not in selected and row["operation"] != "dataset_reset":
-            continue
-        data = _safe_json_object(row["record_json"]) if row["record_json"] else None
-        changes.append({
-            "revision": row["revision"],
-            "entity_type": row["entity_type"],
-            "entity_id": row["entity_id"],
-            "operation": row["operation"],
-            "set": _safe_json_object(row["set_json"]),
-            "unset": json.loads(row["unset_json"]),
-            "data": data,
-        })
-        if len(changes) == limit:
-            break
-    has_more = cursor.execute(
-        "SELECT 1 FROM sync_changes WHERE revision > ? LIMIT 1",
-        (next_cursor,),
-    ).fetchone() is not None
+    include_hash = payload.get("include_hash", False)
+    if not isinstance(include_hash, bool):
+        raise SyncProtocolError(
+            "include_hash must be a boolean.", code="invalid_payload"
+        )
     body = {
         "status": "success",
-        "changes": changes,
-        "next_cursor": next_cursor,
-        "current_revision": meta["current_revision"],
-        "min_available_revision": meta["min_available_revision"],
-        "generation_id": meta["generation_id"],
-        "has_more": has_more,
-        "hash_entity_types": entity_types,
-        "dataset_hash": None if has_more else dataset_hash(cursor, entity_types),
+        **_collect_sync_changes(
+            cursor, cursor_value, limit, entity_types, include_hash=include_hash
+        ),
     }
     connection.commit()
     return body
@@ -2085,6 +2294,7 @@ def _v1_update(connection, cursor, payload, entity_type):
             if changed_fields:
                 _update_field_revisions(
                     cursor, entity_type, entity_id, changed_fields, revision,
+                    int(time.time() * 1000) if entity_type == "product" else 0,
                 )
                 _record_change(
                     cursor, revision, generation_id, entity_type, entity_id,

@@ -548,7 +548,10 @@ class SelfHostedBackendTest(unittest.TestCase):
         v1 = self.post("get_all")
         self.assertEqual(v1.status_code, 200)
         self.assertEqual(len(v1.get_json()["data"]), 1)
-        v2 = self.post("get_capabilities_v2")
+        generation = self.capabilities()["generation_id"]
+        v2 = self.post("sync_v2_snapshot", {
+            "generation_id": generation, "limit": 10,
+        })
         self.assertEqual(v2.status_code, 500)
         self.assertEqual(v2.get_json(), {
             "status": "error", "message": "Database error."
@@ -597,20 +600,23 @@ class SelfHostedBackendTest(unittest.TestCase):
 
     # --- V2 contract -------------------------------------------------------
 
-    def test_capability_contract_busy_timeout_and_empty_hash(self):
+    def test_capability_contract_is_constant_time_metadata(self):
         capabilities = self.capabilities()
         self.assertEqual(capabilities["protocol_version"], 2)
-        self.assertEqual(capabilities["sync_core_version"], "2.0.0")
+        self.assertEqual(capabilities["sync_core_version"], "2.1.0")
         self.assertEqual(capabilities["canonicalization"], "jcs-rfc8785-v1")
         self.assertEqual(capabilities["limits"], {
             "push_mutations": 100,
             "pull_changes": 500,
             "snapshot_records": 500,
         })
-        empty_projection = backend.canonical_json([]).encode("utf-8")
-        self.assertEqual(
-            capabilities["dataset_hash"], hashlib.sha256(empty_projection).hexdigest()
-        )
+        self.assertNotIn("dataset_hash", capabilities)
+        self.assertTrue(capabilities["features"]["push_pull_exchange"])
+        self.assertTrue(capabilities["features"]["on_demand_pull_hash"])
+        self.assertTrue(capabilities["features"]["authoritative_status_fields"])
+        self.assertTrue(capabilities["features"]["product_last_write_wins"])
+        self.assertTrue(capabilities["features"]["product_intent_age_lww"])
+        self.assertFalse(capabilities["features"]["product_delete_supported"])
         connection, cursor = backend.get_db_conn(TOKEN)
         try:
             self.assertEqual(cursor.execute("PRAGMA busy_timeout").fetchone()[0], 30_000)
@@ -671,7 +677,8 @@ class SelfHostedBackendTest(unittest.TestCase):
         self.assertEqual(result["data"]["ASIN"], "B000000001")
 
         pull = self.post("sync_v2_pull", {
-            "generation_id": generation, "cursor": 0, "limit": 10
+            "generation_id": generation, "cursor": 0, "limit": 10,
+            "include_hash": True,
         }).get_json()
         self.assertFalse(pull["has_more"])
         self.assertEqual(pull["next_cursor"], 1)
@@ -700,6 +707,46 @@ class SelfHostedBackendTest(unittest.TestCase):
         ).hexdigest()
         self.assertEqual(snapshot["dataset_hash"], expected_hash)
         self.assertEqual(pull["dataset_hash"], expected_hash)
+
+    def test_v21_push_exchange_and_authoritative_status_overwrite(self):
+        generation = self.capabilities()["generation_id"]
+        created = self.push(generation, [self.mutation(
+            "status-create", set_values={"usageStatus": ["Lager"]},
+        )]).get_json()["results"][0]
+        changed = self.push(generation, [self.mutation(
+            "status-remote", base=created["revision"],
+            set_values={"usageStatus": ["entsorgt"]},
+        )]).get_json()["results"][0]
+
+        authoritative = self.mutation(
+            "status-authoritative",
+            base=created["revision"],
+            set_values={"usageStatus": ["verkauft"]},
+            authoritative_fields=["usageStatus"],
+        )
+        exchange = self.post("sync_v2_push", {
+            "generation_id": generation,
+            "client_id": "v21-client",
+            "mutations": [authoritative],
+            "pull_since": 0,
+            "pull_limit": 10,
+            "entity_types": ["product"],
+        }).get_json()
+        self.assertEqual(exchange["results"][0]["status"], "applied")
+        self.assertGreater(exchange["results"][0]["revision"], changed["revision"])
+        self.assertEqual(exchange["results"][0]["data"]["usageStatus"], ["verkauft"])
+        self.assertEqual([item["revision"] for item in exchange["changes"]], [1, 2, 3])
+        self.assertEqual(exchange["next_cursor"], 3)
+        self.assertFalse(exchange["has_more"])
+        self.assertIsNone(exchange["dataset_hash"])
+
+        same_target = self.push(generation, [self.mutation(
+            "status-noop", base=created["revision"],
+            set_values={"usageStatus": ["verkauft"]},
+            authoritative_fields=["usageStatus"],
+        )]).get_json()
+        self.assertEqual(same_target["results"][0]["status"], "noop")
+        self.assertEqual(same_target["current_revision"], 3)
 
     def test_scoped_pull_skips_other_entities_without_losing_cursor(self):
         generation = self.capabilities()["generation_id"]
@@ -734,9 +781,12 @@ class SelfHostedBackendTest(unittest.TestCase):
 
     def test_idempotency_and_mutation_id_reuse_are_transactional(self):
         generation = self.capabilities()["generation_id"]
-        mutation = self.mutation("same-id", set_values={"name": "Original"})
+        mutation = self.mutation(
+            "same-id", set_values={"name": "Original"}, intent_age_ms=1_000,
+        )
         first = self.push(generation, [mutation]).get_json()
-        second = self.push(generation, [mutation]).get_json()
+        retry_with_increased_age = {**mutation, "intent_age_ms": 2_000}
+        second = self.push(generation, [retry_with_increased_age]).get_json()
         self.assertEqual(second["results"], first["results"])
         self.assertEqual(second["current_revision"], 1)
 
@@ -748,6 +798,12 @@ class SelfHostedBackendTest(unittest.TestCase):
         self.assertEqual(response.get_json()["code"], "mutation_id_reused")
         self.assertEqual(self.capabilities()["current_revision"], 1)
         self.assertEqual(self.post("get_asin", ["B000000002"]).get_json()["data"], [])
+
+        negative_age = self.push(generation, [self.mutation(
+            "negative-age", set_values={"name": "Future bug"}, intent_age_ms=-1,
+        )])
+        self.assertEqual(negative_age.status_code, 400)
+        self.assertEqual(negative_age.get_json()["code"], "invalid_mutation")
 
     def test_base_revision_ahead_rejects_the_entire_push_batch(self):
         generation = self.capabilities()["generation_id"]
@@ -765,7 +821,7 @@ class SelfHostedBackendTest(unittest.TestCase):
         self.assertEqual(self.capabilities()["current_revision"], 0)
         self.assertEqual(self.post("get_all").get_json()["data"], [])
 
-    def test_field_level_merge_same_value_noop_and_conflict(self):
+    def test_product_field_level_merge_same_value_noop_and_last_write_wins(self):
         generation = self.capabilities()["generation_id"]
         created = self.push(generation, [self.mutation(
             "create", set_values={"name": "Base", "etv": 1}
@@ -788,12 +844,37 @@ class SelfHostedBackendTest(unittest.TestCase):
         )]).get_json()["results"][0]
         self.assertEqual(same_target["status"], "noop")
 
-        conflict = self.push(generation, [self.mutation(
-            "conflict", base=base, set_values={"name": "Client"}
+        last_write = self.push(generation, [self.mutation(
+            "last-write", base=base, set_values={"name": "Client"}
         )]).get_json()["results"][0]
-        self.assertEqual(conflict["status"], "conflict")
-        self.assertEqual(list(conflict["conflict"]["fields"]), ["name"])
-        self.assertEqual(conflict["conflict"]["server_data"]["name"], "Server")
+        self.assertEqual(last_write["status"], "applied")
+        self.assertEqual(last_write["data"]["name"], "Client")
+        self.assertEqual(last_write["data"]["etv"], 2)
+
+    def test_older_offline_product_intent_cannot_overwrite_newer_client_intent(self):
+        generation = self.capabilities()["generation_id"]
+        newer = self.push(generation, [self.mutation(
+            "newer-five-euros", set_values={"myteilwert": 5},
+            intent_age_ms=0,
+        )]).get_json()["results"][0]
+        revision = newer["revision"]
+
+        older_offline = self.push(generation, [self.mutation(
+            "older-ten-euros", base=0, set_values={"myteilwert": 10},
+            intent_age_ms=14 * 24 * 60 * 60 * 1000,
+        )]).get_json()["results"][0]
+        self.assertEqual(older_offline["status"], "noop")
+        self.assertEqual(older_offline["revision"], revision)
+        self.assertEqual(older_offline["data"]["myteilwert"], 5)
+        self.assertEqual(older_offline["ignored_fields"], ["myteilwert"])
+        self.assertEqual(self.capabilities()["current_revision"], revision)
+
+        equal_clock_arrives_later = self.push(generation, [self.mutation(
+            "equal-clock-arrival-wins", base=0, set_values={"myteilwert": 7},
+            intent_age_ms=0,
+        )]).get_json()["results"][0]
+        self.assertEqual(equal_clock_arrives_later["status"], "applied")
+        self.assertEqual(equal_clock_arrives_later["data"]["myteilwert"], 7)
 
     def test_null_unset_delete_tombstone_and_generation_errors(self):
         generation = self.capabilities()["generation_id"]
@@ -810,33 +891,10 @@ class SelfHostedBackendTest(unittest.TestCase):
 
         deleted = self.push(generation, [self.mutation(
             "delete", base=unset["revision"], operation="delete"
-        )]).get_json()["results"][0]
-        self.assertEqual(deleted["status"], "applied")
-        self.assertEqual(self.post("get_all").get_json()["data"], [])
-        pulled = self.post("sync_v2_pull", {
-            "generation_id": generation,
-            "cursor": unset["revision"],
-        }).get_json()
-        self.assertEqual(pulled["changes"][0]["operation"], "delete")
-        self.assertIsNone(pulled["changes"][0]["data"])
-
-        stale_resurrection = self.push(generation, [self.mutation(
-            "stale", base=revision, set_values={"name": "Resurrect"}
-        )]).get_json()["results"][0]
-        self.assertEqual(stale_resurrection["status"], "conflict")
-        self.assertEqual(
-            stale_resurrection["conflict"]["server_revision"], deleted["revision"]
-        )
-        self.assertEqual(
-            stale_resurrection["conflict"]["fields"]["__record__"]["server_revision"],
-            deleted["revision"],
-        )
-
-        legacy_resurrection = self.post("update_asin", [
-            self.v1_product(timestamp=9999999999, name="Legacy resurrection")
-        ]).get_json()
-        self.assertEqual(legacy_resurrection["skipped"], 1)
-        self.assertEqual(self.post("get_all").get_json()["data"], [])
+        )])
+        self.assertEqual(deleted.status_code, 400)
+        self.assertEqual(deleted.get_json()["code"], "invalid_mutation")
+        self.assertEqual(len(self.post("get_all").get_json()["data"]), 1)
 
         mismatch = self.post("sync_v2_pull", {
             "generation_id": "wrong", "cursor": 0
