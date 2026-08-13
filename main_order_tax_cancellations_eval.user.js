@@ -17,12 +17,17 @@
 // @grant       GM_deleteValue
 // @grant       GM_listValues
 // @grant       GM_setClipboard
+// @grant       GM_info
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.114100
+// @version     1.114200
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // ==/UserScript==
+
+const VTT_SCRIPT_VERSION = typeof GM_info !== 'undefined' && GM_info?.script?.version
+  ? String(GM_info.script.version)
+  : '1.114200';
 
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
@@ -660,6 +665,15 @@ GM_addStyle(`
       margin: 3px 0 0;
       color: var(--vtt-muted);
       font-size: 11px;
+    }
+
+    #vine-data-extractor .vtt-version-footer {
+      margin-top: 18px;
+      border-top: 1px solid var(--vtt-border);
+      padding-top: 12px;
+      color: var(--vtt-muted);
+      font-size: 11px;
+      text-align: center;
     }
 
     #vine-data-extractor #data-table {
@@ -5231,6 +5245,10 @@ GM_addStyle(`
                             <div id="data-table"></div>
                           </div>
                         </details>
+
+                        <footer class="vtt-version-footer" aria-label="Userscript-Version">
+                          Vine Tax Tools v${escapeHtml(VTT_SCRIPT_VERSION)}
+                        </footer>
                       </div>
 
                       <dialog id="vtt-settings-dialog" class="vtt-dialog" role="dialog" aria-modal="true" aria-labelledby="vtt-settings-title">
