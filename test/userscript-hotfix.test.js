@@ -19,7 +19,7 @@ const uiFixtureSource = fs.readFileSync(uiFixturePath, 'utf8');
 
 test('userscript metadata version is rendered in the generated box footer', () => {
   const metadataVersion = userscriptSource.match(/^\/\/ @version\s+(\S+)/m)?.[1];
-  assert.equal(metadataVersion, '1.114200');
+  assert.equal(metadataVersion, '1.114201');
   assert.match(userscriptSource, /const VTT_SCRIPT_VERSION =/);
   assert.match(userscriptSource, /Vine Tax Tools v\$\{escapeHtml\(VTT_SCRIPT_VERSION\)\}/);
   assert.match(userscriptSource, /class="vtt-version-footer"/);
