@@ -721,6 +721,31 @@ test('syncProducts drains pending batches after a failure and rejects only after
   assert.deepStrictEqual(recovery, { count: 1 });
 });
 
+test('estimator retry is driven by a missing v2 value, not a missing PDF link', async () => {
+  const { api, context } = await loadUserscript();
+  const handler = new api.PrivateBackendHandler();
+  await api.setValue('last_full_sync', Date.now());
+
+  const requests = [];
+  context.GM_xmlhttpRequest = options => {
+    requests.push(JSON.parse(options.data));
+    options.onload({
+      status: 200,
+      responseText: '{"status":"success","existing_asins":[]}'
+    });
+  };
+
+  const result = await handler.syncProductsBatch([
+    { ASIN: 'B012345678', name: 'Already valued', etv: 10, teilwert_v2: 5, pdf: null },
+    { ASIN: 'B087654321', name: 'Still missing v2', etv: 20, teilwert_v2: null, pdf: 'legacy.pdf' }
+  ]);
+
+  assert.strictEqual(result.estimatorCount, 1);
+  assert.deepStrictEqual(requests, [[
+    { ASIN: 'B087654321', name: 'Still missing v2', ETV: 20 }
+  ]]);
+});
+
 test('public estimator and private v1 DTOs retain their existing shapes', async () => {
   const { api, context } = await loadUserscript();
   const handler = new api.PrivateBackendHandler();

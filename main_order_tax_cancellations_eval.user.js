@@ -4320,7 +4320,7 @@ GM_addStyle(`
                   const needFullSync = Date.now() - Number(lastFullSync || 0) > 7 * 24 * 60 * 60 * 1000;
                   const sourceProducts = needFullSync ? await this.readAllProducts() : products;
                   const estimatorProducts = sourceProducts.filter(
-                    product => needFullSync || !product.pdf || product.pdf === 'NaN' || product.teilwert_v2 == null
+                    product => needFullSync || product.teilwert_v2 == null
                   );
                   const anonPayload = estimatorProducts.map(product => ({
                     ASIN: product.ASIN,
