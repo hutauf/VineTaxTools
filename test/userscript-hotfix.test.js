@@ -19,7 +19,7 @@ const uiFixtureSource = fs.readFileSync(uiFixturePath, 'utf8');
 
 test('userscript metadata version is rendered in the generated box footer', () => {
   const metadataVersion = userscriptSource.match(/^\/\/ @version\s+(\S+)/m)?.[1];
-  assert.equal(metadataVersion, '1.114201');
+  assert.equal(metadataVersion, '1.114202');
   assert.match(userscriptSource, /const VTT_SCRIPT_VERSION =/);
   assert.match(userscriptSource, /Vine Tax Tools v\$\{escapeHtml\(VTT_SCRIPT_VERSION\)\}/);
   assert.match(userscriptSource, /class="vtt-version-footer"/);
@@ -2538,6 +2538,17 @@ test('setting changes refresh an open table and destroy DataTables before rebuil
   assert.match(tableRenderer, /destroyExistingAsinDataTable\(\);\s+renderTableFilterSummary/);
   assert.doesNotMatch(tableRenderer, /window\.progressBar\.hide\(\)/);
   assert.doesNotMatch(tableRenderer, /\$\(document\)\.ready/);
+});
+
+test('product table exposes chronological DataTables sort values for dates', () => {
+  const tableRenderer = userscriptSource.slice(
+    userscriptSource.indexOf('function destroyExistingAsinDataTable'),
+    userscriptSource.indexOf('async function showTeilwertPopup')
+  );
+
+  assert.match(tableRenderer, /const parsedDate = parseDateSafe\(item\.date\)/);
+  assert.match(tableRenderer, /const dateSortValue = parsedDate \? parsedDate\.getTime\(\) : 0/);
+  assert.match(tableRenderer, /data-order="\$\{dateSortValue\}"/);
 });
 
 test('account startup sync and orders autoload are explicit while the storage loader stays read-only', () => {

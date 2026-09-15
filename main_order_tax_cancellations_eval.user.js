@@ -20,14 +20,14 @@
 // @grant       GM_info
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.114201
+// @version     1.114202
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // ==/UserScript==
 
 const VTT_SCRIPT_VERSION = typeof GM_info !== 'undefined' && GM_info?.script?.version
   ? String(GM_info.script.version)
-  : '1.114200';
+  : '1.114202';
 
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
@@ -6567,6 +6567,8 @@ async function createPieChart(list, parentElement) {
           asinData.forEach(item => {
               const asin = normalizeAsin(item.ASIN);
               if (!asin) return;
+              const parsedDate = parseDateSafe(item.date);
+              const dateSortValue = parsedDate ? parsedDate.getTime() : 0;
               const pdfLink = getSafeHttpUrl(getPDFLink({ ...item, ASIN: asin }, settings));
               let teilwertDisplay;
               if (item.myteilwert != null) {
@@ -6578,7 +6580,7 @@ async function createPieChart(list, parentElement) {
 
               table += `<tr>
                           <td>${escapeHtml(asin)}</td>
-                          <td style="white-space: nowrap;">${escapeHtml(item.date || 'N/A')}</td>
+                          <td data-order="${dateSortValue}" style="white-space: nowrap;">${escapeHtml(item.date || 'N/A')}</td>
                           <td>${escapeHtml(item.name || 'N/A')}</td>
                           <td>${escapeHtml(item.etv)}</td>
                           <td>${item.keepa != null ? `<a href="https://keepa.com/#!product/3-${asin}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.keepa)}</a>` : 'N/A'}</td>
