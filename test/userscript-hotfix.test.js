@@ -19,7 +19,7 @@ const uiFixtureSource = fs.readFileSync(uiFixturePath, 'utf8');
 
 test('userscript metadata version is rendered in the generated box footer', () => {
   const metadataVersion = userscriptSource.match(/^\/\/ @version\s+(\S+)/m)?.[1];
-  assert.equal(metadataVersion, '1.114203');
+  assert.equal(metadataVersion, '1.114204');
   assert.match(userscriptSource, /const VTT_SCRIPT_VERSION =/);
   assert.match(userscriptSource, /Vine Tax Tools v\$\{escapeHtml\(VTT_SCRIPT_VERSION\)\}/);
   assert.match(userscriptSource, /class="vtt-version-footer"/);
@@ -2743,6 +2743,127 @@ test('orders import sends only the ten visible rows even when the weekly full sy
   assert.ok(requests[0].every(row => Object.keys(row).sort().join(',') === 'ASIN,ETV,name'));
   assert.equal(await api.getValue('last_full_sync', 0), 0, 'Orders must leave the weekly refresh due');
   assert.equal(JSON.parse(await api.getValue(`ASIN_${visible[0]}`)).ordernumber, `private-order-${visible[0]}`);
+});
+
+function mockHydratingOrders(context, count = 10) {
+  const dates = Array.from({ length: count }, () => ({
+    textContent: '', getAttribute: () => '1792065600000'
+  }));
+  const rows = dates.map((date, i) => ({
+    innerHTML: '',
+    querySelector(selector) {
+      if (selector.includes('data-order-timestamp')) return date;
+      if (selector === 'span.a-truncate-full') return { textContent: `Synthetic product ${i}` };
+      if (selector.includes('vvp-text-align-right')) return { textContent: '12,34 €' };
+      if (selector.includes("a[href^=")) return { getAttribute: () => `https://www.amazon.de/dp/B${String(i).padStart(9, '0')}` };
+      if (selector.includes('orderID=')) return { getAttribute: () => `?orderID=synthetic-${i}` };
+      return null;
+    }
+  }));
+  const observers = new Set();
+  context.MutationObserver = class {
+    constructor(callback) { this.callback = callback; }
+    observe() { observers.add(this); }
+    disconnect() { observers.delete(this); }
+  };
+  context.document.documentElement = {};
+  context.document.querySelectorAll = selector => selector === '.vvp-orders-table--row' ? rows : [];
+  const notify = () => [...observers].forEach(observer => observer.callback([]));
+  return { dates, rows, notify, observers };
+}
+
+test('ready orders import immediately without a hydration observer or fixed sleep', async () => {
+  const { api, context } = await loadUserscript();
+  const { dates } = mockHydratingOrders(context);
+  dates.forEach(date => { date.textContent = '15.10.2026'; });
+  context.MutationObserver = class { constructor() { throw new Error('Ready rows must not wait'); } };
+  context.setTimeout = () => { throw new Error('Ready rows must not sleep'); };
+  assert.equal(Object.keys((await api.waitForOrdersTable()).data).length, 10);
+});
+
+test('orders wait for every rendered date and coalesce repeated imports into one ten-row upload', async () => {
+  const { api, context } = await loadUserscript();
+  const { dates, notify, observers } = mockHydratingOrders(context);
+  const button = { disabled: false };
+  context.document.getElementById = id => id === 'load-orders-info' ? button : null;
+  const requests = [], alerts = [];
+  context.alert = message => alerts.push(message);
+  context.GM_xmlhttpRequest = options => {
+    requests.push(JSON.parse(options.data));
+    options.onload({ status: 200, responseText: '{"status":"success","existing_asins":[]}' });
+  };
+  const progress = { setText(text) { this.text = text; }, show() {}, setFillWidth() {}, setState(state) { this.state = state; } };
+  context.window.progressBar = progress;
+  const first = api.loadOrdersInfo();
+  assert.strictEqual(api.loadOrdersInfo(), first);
+  assert.equal(button.disabled, true);
+  assert.equal(requests.length, 0);
+  assert.match(progress.text, /Warte auf vollständige Amazon-Bestelldaten/);
+  dates.slice(0, 9).forEach(date => { date.textContent = '15.10.2026'; });
+  notify();
+  await Promise.resolve();
+  assert.equal(requests.length, 0, 'Never upload a partial nine-row snapshot');
+  dates[9].textContent = '15.10.2026';
+  notify();
+  await first;
+  await api.requestDashboardRefresh();
+  assert.equal(observers.size, 0);
+  assert.equal(button.disabled, false);
+  assert.equal(alerts.length, 0);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].length, 10);
+  assert.equal(JSON.parse(await api.getValue('ASIN_B000000000')).date, '15/10/2026');
+  assert.equal(dates[0].getAttribute('data-order-timestamp'), '1792065600000');
+  assert.equal(progress.state, 'success');
+});
+
+test('hydration timeout cleans up without saving or reporting success and permits a manual retry', async () => {
+  const { api, context } = await loadUserscript();
+  const { dates, observers } = mockHydratingOrders(context, 1);
+  const realTimeout = context.setTimeout;
+  context.setTimeout = (fn, delay) => realTimeout(fn, delay === 30000 ? 10 : delay);
+  const button = { disabled: false };
+  context.document.getElementById = id => id === 'load-orders-info' ? button : null;
+  const progress = { setText(text) { this.text = text; }, show() {}, setFillWidth() {}, setState(state) { this.state = state; } };
+  context.window.progressBar = progress;
+  const errors = [];
+  context.console = { ...console, error: (...args) => errors.push(args) };
+  await api.loadOrdersInfo();
+  assert.equal(progress.state, 'error');
+  assert.match(progress.text, /Amazon hat die Bestelltabelle noch nicht vollständig geladen/);
+  assert.equal(await api.getValue('ASIN_B000000000', null), null);
+  assert.equal(observers.size, 0);
+  assert.equal(button.disabled, false);
+  dates[0].textContent = '15.10.2026';
+  let uploads = 0;
+  context.GM_xmlhttpRequest = options => {
+    uploads++;
+    options.onload({ status: 200, responseText: '{"status":"success","existing_asins":[]}' });
+  };
+  await api.loadOrdersInfo();
+  assert.equal(progress.state, 'success');
+  assert.equal(uploads, 1);
+  assert.equal(errors.length, 1);
+});
+
+test('orders readiness also waits for rows inserted after an initially empty table', async () => {
+  const { api, context } = await loadUserscript();
+  const { dates, rows, notify, observers } = mockHydratingOrders(context, 1);
+  context.document.querySelectorAll = () => [];
+  const ready = api.waitForOrdersTable({ timeoutMs: 1000 });
+  context.document.querySelectorAll = () => rows;
+  dates[0].textContent = '15. Oktober 2026';
+  notify();
+  assert.equal((await ready).data.B000000000.date, '15/10/2026');
+  assert.equal(observers.size, 0);
+});
+
+test('invalid rendered dates are not accepted as ready orders', async () => {
+  const { api, context } = await loadUserscript();
+  const { dates, observers } = mockHydratingOrders(context, 1);
+  dates[0].textContent = '31.02.2026';
+  await assert.rejects(api.waitForOrdersTable({ timeoutMs: 10 }), /keine Bestellungen importiert/);
+  assert.equal(observers.size, 0);
 });
 
 test('orders V1 upload stays scoped and verifies only the visible products', async () => {

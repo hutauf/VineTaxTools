@@ -21,14 +21,14 @@
 // @grant       GM_info
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.114203
+// @version     1.114204
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // ==/UserScript==
 
 const VTT_SCRIPT_VERSION = typeof GM_info !== 'undefined' && GM_info?.script?.version
   ? String(GM_info.script.version)
-  : '1.114203';
+  : '1.114204';
 
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
@@ -6488,11 +6488,62 @@ async function createPieChart(list, parentElement) {
                    }
                }
 
-                async function loadOrdersInfo() {
+                function waitForOrdersTable({ timeoutMs = 30000 } = {}) {
+                    const readReadyTable = () => {
+                        if (document.querySelectorAll('.vvp-orders-table--row').length === 0) return null;
+                        const result = parseOrdersTable();
+                        return result.errors.length === 0 ? result : null;
+                    };
+                    const ready = readReadyTable();
+                    if (ready) return Promise.resolve(ready);
+
+                    // Amazon hydrates the date cells after DOMContentLoaded. Import only a
+                    // complete snapshot, using its rendered calendar dates rather than
+                    // interpreting raw Unix timestamps in a potentially different timezone.
+                    return new Promise((resolve, reject) => {
+                        let observer, timeout, settled = false;
+                        const finish = (result, error) => {
+                            if (settled) return;
+                            settled = true;
+                            observer?.disconnect();
+                            clearTimeout(timeout);
+                            if (error) reject(error);
+                            else resolve(result);
+                        };
+                        const check = () => {
+                            const result = readReadyTable();
+                            if (result) finish(result);
+                        };
+                        observer = new MutationObserver(check);
+                        observer.observe(document.documentElement, {
+                            childList: true, subtree: true, characterData: true,
+                            attributes: true, attributeFilter: ['data-order-timestamp', 'href']
+                        });
+                        timeout = setTimeout(() => finish(null, new Error(
+                            'Amazon hat die Bestelltabelle noch nicht vollständig geladen. '
+                            + 'Bitte warten und „Load Orders Info“ erneut anklicken. Es wurden keine Bestellungen importiert.'
+                        )), timeoutMs);
+                        check(); // Covers hydration between the initial read and observer registration.
+                    });
+                }
+
+                let ordersImportPromise = null;
+                function loadOrdersInfo() {
+                    if (ordersImportPromise) return ordersImportPromise;
+                    ordersImportPromise = importOrdersInfo().finally(() => {
+                        ordersImportPromise = null;
+                    });
+                    return ordersImportPromise;
+                }
+
+                async function importOrdersInfo() {
+                    const button = document.getElementById('load-orders-info');
+                    if (button) button.disabled = true;
                     try {
                         setAutomaticSyncStep(1, 'Amazon-Bestellimport wird vorbereitet ...', 1);
+                        setAutomaticSyncStep(2, 'Warte auf vollständige Amazon-Bestelldaten und Datumsangaben ...', 0.05);
+                        const {data} = await waitForOrdersTable();
                         setAutomaticSyncStep(2, 'Bestellzeilen werden gelesen und lokal gespeichert ...', 0.15);
-                        const {data, errors} = parseOrdersTable();
                         await saveData(data, true, { visibleOnly: true });
 
                         setAutomaticSyncStep(
@@ -6500,9 +6551,6 @@ async function createPieChart(list, parentElement) {
                           `${Object.keys(data).length} erkannte Bestellungen werden abschließend geprüft ...`,
                           1
                         );
-                        if (errors.length > 0) {
-                            alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
-                        }
                         setAutomaticSyncStep(
                           7,
                           `Abgeschlossen. ${Object.keys(data).length} Bestellungen wurden lokal gespeichert und synchronisiert.`,
@@ -6520,6 +6568,7 @@ async function createPieChart(list, parentElement) {
                           "error"
                         );
                     } finally {
+                        if (button) button.disabled = false;
                         requestDashboardRefresh().catch(refreshError => {
                           console.error('Could not refresh the dashboard after order import:', refreshError);
                         });
@@ -6940,6 +6989,8 @@ async function createPieChart(list, parentElement) {
                       loadOptionalLibrary,
                       startPage,
                       loadOrdersInfo,
+                      parseOrdersTable,
+                      waitForOrdersTable,
                       requestDashboardRefresh,
                       PrivateBackendHandler,
                       backendHandler,
