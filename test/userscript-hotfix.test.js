@@ -19,7 +19,7 @@ const uiFixtureSource = fs.readFileSync(uiFixturePath, 'utf8');
 
 test('userscript metadata version is rendered in the generated box footer', () => {
   const metadataVersion = userscriptSource.match(/^\/\/ @version\s+(\S+)/m)?.[1];
-  assert.equal(metadataVersion, '1.114202');
+  assert.equal(metadataVersion, '1.114204');
   assert.match(userscriptSource, /const VTT_SCRIPT_VERSION =/);
   assert.match(userscriptSource, /Vine Tax Tools v\$\{escapeHtml\(VTT_SCRIPT_VERSION\)\}/);
   assert.match(userscriptSource, /class="vtt-version-footer"/);
@@ -216,7 +216,7 @@ async function loadUserscript({ DexieImpl = FakeDexie } = {}) {
 
 test('the userscript has a single Promise-based GM request gateway', () => {
   assert.strictEqual((userscriptSource.match(/GM_xmlhttpRequest\s*\(/g) || []).length, 1);
-  assert.strictEqual((userscriptSource.match(/^\/\/ @require /gm) || []).length, 7);
+  assert.strictEqual((userscriptSource.match(/^\/\/ @require /gm) || []).length, 1);
   assert.doesNotMatch(userscriptSource, /console\.log\(\s*['"`]POST /);
   assert.doesNotMatch(userscriptSource, /setFillWidth\(i\s*\*\s*10\)/);
   assert.doesNotMatch(userscriptSource, /toISOString\s*\(/);
@@ -2600,7 +2600,7 @@ test('account startup sync and orders autoload are explicit while the storage lo
   );
   assert.match(ordersUi, /setAutomaticSyncStep\(1, 'Amazon-Bestellimport wird vorbereitet/);
   assert.doesNotMatch(ordersUi, /progressBar\.hide\(\)/);
-  assert.match(ordersUi, /await loadOrdersInfo\(\)/);
+  assert.match(ordersUi, /return loadOrdersInfo\(\)/);
 });
 
 test('seven-step sync feedback stays inside the progress bar', async () => {
@@ -2704,4 +2704,333 @@ test('known cancellation rows never fall through into product data', async () =>
   assert.strictEqual(Object.hasOwn(result.data, 'B012345678'), false);
   assert.strictEqual(Object.hasOwn(result.data, 'B087654321'), true);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(await api.getValue('cancellations'))), ['B012345678']);
+});
+
+test('orders import sends only the ten visible rows even when the weekly full sync is overdue', async () => {
+  const { api, context } = await loadUserscript();
+  const visible = Array.from({ length: 10 }, (_, i) => `B${String(i).padStart(9, '0')}`);
+  await api.setValue('ASIN_B999999999', JSON.stringify({ name: 'Old history', etv: 99 }));
+  api.backendHandler.readAllProducts = () => { throw new Error('Orders must not read history'); };
+  const originalList = api.db.products.where.bind(api.db.products);
+  api.db.products.where = index => {
+    assert.notEqual(index, 'profileId', 'Orders must not scan the product database');
+    return originalList(index);
+  };
+  context.document.querySelectorAll = selector => selector === '.vvp-orders-table--row'
+    ? visible.map(asin => ({
+        innerHTML: '',
+        querySelector(selector) {
+          if (selector.includes('data-order-timestamp')) return { textContent: '15.10.2026' };
+          if (selector === 'span.a-truncate-full') return { textContent: `Product ${asin}` };
+          if (selector.includes('vvp-text-align-right')) return { textContent: '12,34 €' };
+          if (selector.includes("a[href^=")) return { getAttribute: () => `https://www.amazon.de/dp/${asin}` };
+          if (selector.includes('orderID=')) return { getAttribute: () => `?orderID=private-order-${asin}` };
+          return null;
+        }
+      })) : [];
+  const requests = [];
+  context.GM_xmlhttpRequest = options => {
+    requests.push(JSON.parse(options.data));
+    options.onload({ status: 200, responseText: '{"status":"success","existing_asins":[]}' });
+  };
+  const progress = { setText(text) { this.text = text; }, show() {}, setFillWidth() {}, setState() {} };
+  context.window.progressBar = progress;
+  await api.loadOrdersInfo();
+  await api.requestDashboardRefresh();
+  assert.match(progress.text, /10 Bestellungen wurden lokal gespeichert und synchronisiert/);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].map(row => row.ASIN), visible);
+  assert.ok(requests[0].every(row => Object.keys(row).sort().join(',') === 'ASIN,ETV,name'));
+  assert.equal(await api.getValue('last_full_sync', 0), 0, 'Orders must leave the weekly refresh due');
+  assert.equal(JSON.parse(await api.getValue(`ASIN_${visible[0]}`)).ordernumber, `private-order-${visible[0]}`);
+});
+
+function mockHydratingOrders(context, count = 10) {
+  const dates = Array.from({ length: count }, () => ({
+    textContent: '', getAttribute: () => '1792065600000'
+  }));
+  const rows = dates.map((date, i) => ({
+    innerHTML: '',
+    querySelector(selector) {
+      if (selector.includes('data-order-timestamp')) return date;
+      if (selector === 'span.a-truncate-full') return { textContent: `Synthetic product ${i}` };
+      if (selector.includes('vvp-text-align-right')) return { textContent: '12,34 €' };
+      if (selector.includes("a[href^=")) return { getAttribute: () => `https://www.amazon.de/dp/B${String(i).padStart(9, '0')}` };
+      if (selector.includes('orderID=')) return { getAttribute: () => `?orderID=synthetic-${i}` };
+      return null;
+    }
+  }));
+  const observers = new Set();
+  context.MutationObserver = class {
+    constructor(callback) { this.callback = callback; }
+    observe() { observers.add(this); }
+    disconnect() { observers.delete(this); }
+  };
+  context.document.documentElement = {};
+  context.document.querySelectorAll = selector => selector === '.vvp-orders-table--row' ? rows : [];
+  const notify = () => [...observers].forEach(observer => observer.callback([]));
+  return { dates, rows, notify, observers };
+}
+
+test('ready orders import immediately without a hydration observer or fixed sleep', async () => {
+  const { api, context } = await loadUserscript();
+  const { dates } = mockHydratingOrders(context);
+  dates.forEach(date => { date.textContent = '15.10.2026'; });
+  context.MutationObserver = class { constructor() { throw new Error('Ready rows must not wait'); } };
+  context.setTimeout = () => { throw new Error('Ready rows must not sleep'); };
+  assert.equal(Object.keys((await api.waitForOrdersTable()).data).length, 10);
+});
+
+test('orders wait for every rendered date and coalesce repeated imports into one ten-row upload', async () => {
+  const { api, context } = await loadUserscript();
+  const { dates, notify, observers } = mockHydratingOrders(context);
+  const button = { disabled: false };
+  context.document.getElementById = id => id === 'load-orders-info' ? button : null;
+  const requests = [], alerts = [];
+  context.alert = message => alerts.push(message);
+  context.GM_xmlhttpRequest = options => {
+    requests.push(JSON.parse(options.data));
+    options.onload({ status: 200, responseText: '{"status":"success","existing_asins":[]}' });
+  };
+  const progress = { setText(text) { this.text = text; }, show() {}, setFillWidth() {}, setState(state) { this.state = state; } };
+  context.window.progressBar = progress;
+  const first = api.loadOrdersInfo();
+  assert.strictEqual(api.loadOrdersInfo(), first);
+  assert.equal(button.disabled, true);
+  assert.equal(requests.length, 0);
+  assert.match(progress.text, /Warte auf vollständige Amazon-Bestelldaten/);
+  dates.slice(0, 9).forEach(date => { date.textContent = '15.10.2026'; });
+  notify();
+  await Promise.resolve();
+  assert.equal(requests.length, 0, 'Never upload a partial nine-row snapshot');
+  dates[9].textContent = '15.10.2026';
+  notify();
+  await first;
+  await api.requestDashboardRefresh();
+  assert.equal(observers.size, 0);
+  assert.equal(button.disabled, false);
+  assert.equal(alerts.length, 0);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].length, 10);
+  assert.equal(JSON.parse(await api.getValue('ASIN_B000000000')).date, '15/10/2026');
+  assert.equal(dates[0].getAttribute('data-order-timestamp'), '1792065600000');
+  assert.equal(progress.state, 'success');
+});
+
+test('hydration timeout cleans up without saving or reporting success and permits a manual retry', async () => {
+  const { api, context } = await loadUserscript();
+  const { dates, observers } = mockHydratingOrders(context, 1);
+  const realTimeout = context.setTimeout;
+  context.setTimeout = (fn, delay) => realTimeout(fn, delay === 30000 ? 10 : delay);
+  const button = { disabled: false };
+  context.document.getElementById = id => id === 'load-orders-info' ? button : null;
+  const progress = { setText(text) { this.text = text; }, show() {}, setFillWidth() {}, setState(state) { this.state = state; } };
+  context.window.progressBar = progress;
+  const errors = [];
+  context.console = { ...console, error: (...args) => errors.push(args) };
+  await api.loadOrdersInfo();
+  assert.equal(progress.state, 'error');
+  assert.match(progress.text, /Amazon hat die Bestelltabelle noch nicht vollständig geladen/);
+  assert.equal(await api.getValue('ASIN_B000000000', null), null);
+  assert.equal(observers.size, 0);
+  assert.equal(button.disabled, false);
+  dates[0].textContent = '15.10.2026';
+  let uploads = 0;
+  context.GM_xmlhttpRequest = options => {
+    uploads++;
+    options.onload({ status: 200, responseText: '{"status":"success","existing_asins":[]}' });
+  };
+  await api.loadOrdersInfo();
+  assert.equal(progress.state, 'success');
+  assert.equal(uploads, 1);
+  assert.equal(errors.length, 1);
+});
+
+test('orders readiness also waits for rows inserted after an initially empty table', async () => {
+  const { api, context } = await loadUserscript();
+  const { dates, rows, notify, observers } = mockHydratingOrders(context, 1);
+  context.document.querySelectorAll = () => [];
+  const ready = api.waitForOrdersTable({ timeoutMs: 1000 });
+  context.document.querySelectorAll = () => rows;
+  dates[0].textContent = '15. Oktober 2026';
+  notify();
+  assert.equal((await ready).data.B000000000.date, '15/10/2026');
+  assert.equal(observers.size, 0);
+});
+
+test('invalid rendered dates are not accepted as ready orders', async () => {
+  const { api, context } = await loadUserscript();
+  const { dates, observers } = mockHydratingOrders(context, 1);
+  dates[0].textContent = '31.02.2026';
+  await assert.rejects(api.waitForOrdersTable({ timeoutMs: 10 }), /keine Bestellungen importiert/);
+  assert.equal(observers.size, 0);
+});
+
+test('orders V1 upload stays scoped and verifies only the visible products', async () => {
+  const { api, context } = await loadUserscript();
+  const handler = new api.PrivateBackendHandler();
+  await api.setValue('token', 'synthetic-test-token');
+  await api.setValue('ASIN_B999999999', JSON.stringify({ name: 'Unrelated history', etv: 99 }));
+  const data = { B000000001: { name: 'Visible', etv: 12, date: '15/10/2026' } };
+  await api.saveData(data);
+  const requests = [];
+  let payload;
+  context.GM_xmlhttpRequest = options => {
+    const body = JSON.parse(options.data);
+    if (Array.isArray(body)) {
+      requests.push('estimator');
+      options.onload({ status: 200, responseText: '{"status":"success","existing_asins":[]}' });
+    } else if (body.request === 'get_capabilities_v2') {
+      requests.push(body.request);
+      options.onload({ status: 400, responseText: '{"message":"Unknown request type: get_capabilities_v2"}' });
+    } else {
+      requests.push(body.request);
+      if (body.request === 'update_asin') payload = body.payload;
+      if (body.request === 'get_asin') assert.deepEqual(body.payload, ['B000000001']);
+      options.onload({ status: 200, responseText: JSON.stringify({ status: 'success', data: payload.map(row => ({
+        ASIN: row.ASIN, value: row.value, last_update_time: 1
+      })) }) });
+    }
+  };
+  handler.readAllProducts = () => { throw new Error('Unexpected full scan'); };
+  await handler.syncOrdersProducts([{ ASIN: 'B000000001', ...data.B000000001 }]);
+  assert.deepEqual(requests, ['estimator', 'get_capabilities_v2', 'update_asin', 'get_asin']);
+  assert.deepEqual(payload.map(row => row.ASIN), ['B000000001']);
+});
+
+test('orders V2 pushes only visible ASINs without bootstrap, pull exchange or integrity snapshots', async () => {
+  await RealDexie.delete('myDatabase');
+  let api;
+  try {
+    let context;
+    ({ api, context } = await loadUserscript({ DexieImpl: RealDexie }));
+    await api.setValue('token', 'synthetic-test-token');
+    await api.saveData({ B999999999: { name: 'Unrelated pending history', etv: 99 } });
+    const data = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [
+      `B${String(i).padStart(9, '0')}`, { name: `Visible ${i}`, etv: 12, date: '15/10/2026' }
+    ]));
+    await api.saveData(data);
+    const handler = new api.PrivateBackendHandler();
+    const config = await handler.getPrivateConfig();
+    const requests = [];
+    context.GM_xmlhttpRequest = options => {
+      const body = JSON.parse(options.data);
+      requests.push(body.request || 'estimator');
+      let response = { status: 'success', existing_asins: [] };
+      if (body.request === 'get_capabilities_v2') response.data = {
+        protocol_version: 2, generation_id: 'generation-orders',
+        features: { push_pull_exchange: true, authoritative_status_fields: true }
+      };
+      else if (body.request === 'sync_v2_push') {
+        assert.deepEqual(body.payload.mutations.map(row => row.entity_id).sort(), Object.keys(data).sort());
+        assert.equal(Object.hasOwn(body.payload, 'pull_since'), false);
+        response.results = body.payload.mutations.map((mutation, i) => ({
+          mutation_id: mutation.mutation_id, status: 'applied', revision: i + 1, data: mutation.set
+        }));
+      } else assert.ok(Array.isArray(body), `Unexpected full-sync request: ${body.request}`);
+      options.onload({ status: 200, responseText: JSON.stringify(response) });
+    };
+    await handler.syncOrdersProducts(Object.entries(data).map(([ASIN, row]) => ({ ASIN, ...row })));
+    assert.deepEqual(requests, ['estimator', 'get_capabilities_v2', 'sync_v2_push']);
+    const pending = await api.db.outbox.where('profileId').equals(config.profileId).toArray();
+    assert.deepEqual(pending.map(row => row.entityId), ['B999999999']);
+    assert.equal(handler.integritySnapshotScheduled.size, 0);
+    const state = await api.db.syncState.get(config.profileId);
+    assert.equal(Number(state.cursor || 0), 0, 'Scoped pushes must not advance the download cursor');
+  } finally {
+    api?.db?.close();
+    await RealDexie.delete('myDatabase');
+  }
+});
+
+test('optional libraries load once on demand, order dependencies, and retry failed downloads', async () => {
+  const { api, context } = await loadUserscript();
+  const requests = [];
+  let fail = true;
+  context.GM_xmlhttpRequest = options => {
+    requests.push(options.url);
+    if (options.url.includes('jquery-')) options.onload({ status: 200,
+      responseText: 'window.jQuery = function() {}; window.jQuery.fn = {};' });
+    else if (options.url.includes('dataTables')) options.onload({ status: 200,
+      responseText: 'jQuery.fn.DataTable = function() {};' });
+    else if (fail) options.ontimeout({ status: 0 });
+    else options.onload({ status: 200, responseText: 'var XLSX = {synthetic: true};' });
+  };
+  assert.equal(requests.length, 0);
+  const first = api.loadOptionalLibrary('DataTable');
+  const second = api.loadOptionalLibrary('DataTable');
+  assert.equal(first, second);
+  await first;
+  assert.equal(requests.length, 2);
+  assert.match(requests[0], /jquery-3/);
+  assert.match(requests[1], /dataTables/);
+  await api.loadOptionalLibrary('DataTable');
+  assert.equal(requests.length, 2);
+  await assert.rejects(api.loadOptionalLibrary('XLSX'), /timed out/);
+  fail = false;
+  assert.equal((await api.loadOptionalLibrary('XLSX')).synthetic, true);
+  await assert.rejects(api.loadOptionalLibrary('unknown'), /Unknown optional library/);
+});
+
+test('startup uses DOM readiness instead of waiting for window load and skips orders database validation', async () => {
+  const { context } = await loadUserscript();
+  const startupSource = userscriptSource.slice(userscriptSource.indexOf('              function startPage()'));
+  const ordersStart = startupSource.slice(startupSource.indexOf("if (currentPageURL.startsWith('https://www.amazon.de/vine/orders'))"),
+    startupSource.indexOf("if (currentPageURL.startsWith('https://www.amazon.de/vine/account'))"));
+  assert.doesNotMatch(ordersStart, /validateAndFixDatabase|setTimeout/);
+  let registered;
+  context.document.readyState = 'loading';
+  context.document.addEventListener = (event, callback, options) => { registered = { event, callback, options }; };
+  // Evaluate the production startup in isolation; DOMContentLoaded must own the one invocation.
+  vm.runInContext(startupSource.replace(/\}\)\(\);\s*$/, ''), context);
+  assert.equal(registered.event, 'DOMContentLoaded');
+  assert.equal(registered.options.once, true);
+  assert.equal(typeof registered.callback, 'function');
+});
+
+test('orders sync reports a server generation reset without starting a full repair', async () => {
+  const { api, context } = await loadUserscript();
+  const handler = new api.PrivateBackendHandler();
+  await api.setValue('token', 'synthetic-test-token');
+  await api.saveData({ B000000001: { name: 'Visible', etv: 12, teilwert_v2: 4 } });
+  const config = await handler.getPrivateConfig();
+  await api.db.syncState.put({ profileId: config.profileId, generationId: 'old-generation' });
+  context.GM_xmlhttpRequest = options => {
+    const body = JSON.parse(options.data);
+    assert.equal(body.request, 'get_capabilities_v2');
+    options.onload({ status: 200, responseText: JSON.stringify({ status: 'success', data: {
+      protocol_version: 2, generation_id: 'new-generation'
+    } }) });
+  };
+  await assert.rejects(handler.syncOrdersProducts([{ ASIN: 'B000000001', teilwert_v2: 4 }]), /Konto-Seite/);
+  assert.equal(await api.db.outbox.where('profileId').equals(config.profileId).count(), 1);
+  assert.equal(JSON.parse(await api.getValue('ASIN_B000000001')).name, 'Visible');
+});
+
+test('orders V2 leaves rejected intents for account-page repair and reports incomplete sync', async () => {
+  const { api, context } = await loadUserscript();
+  const handler = new api.PrivateBackendHandler();
+  await api.setValue('token', 'synthetic-test-token');
+  await api.saveData({ B000000001: { name: 'Visible', etv: 12, teilwert_v2: 4 } });
+  const config = await handler.getPrivateConfig();
+  const requests = [];
+  context.GM_xmlhttpRequest = options => {
+    const body = JSON.parse(options.data);
+    requests.push(body.request);
+    let response;
+    if (body.request === 'get_capabilities_v2') response = { status: 'success', data: {
+      protocol_version: 2, generation_id: 'generation-orders'
+    } };
+    else {
+      assert.equal(body.request, 'sync_v2_push');
+      response = { status: 'success', results: body.payload.mutations.map(mutation => ({
+        mutation_id: mutation.mutation_id, status: 'conflict'
+      })) };
+    }
+    options.onload({ status: 200, responseText: JSON.stringify(response) });
+  };
+  await assert.rejects(handler.syncOrdersProducts([{ ASIN: 'B000000001', teilwert_v2: 4 }]), /Konto-Seite/);
+  assert.deepEqual(requests, ['get_capabilities_v2', 'sync_v2_push']);
+  assert.equal((await api.db.syncState.get(config.profileId)).serverRepairRequired, true);
+  assert.equal(JSON.parse(await api.getValue('ASIN_B000000001')).name, 'Visible');
 });

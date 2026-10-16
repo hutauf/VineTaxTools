@@ -3,13 +3,14 @@
 // @namespace   Violentmonkey Scripts
 // @match       https://www.amazon.de/vine/account*
 // @match       https://www.amazon.de/vine/orders*
-// @require     https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.8.0/jszip.js
-// @require     https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
 // @require     https://unpkg.com/dexie@4.4.4/dist/dexie.js
-// @require     https://d3js.org/d3.v5.min.js
-// @require     https://cdn.plot.ly/plotly-1.58.5.min.js
-// @require     https://code.jquery.com/jquery-3.5.1.js
-// @require     https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js
+// @run-at      document-end
+// @connect     cdn.sheetjs.com
+// @connect     d3js.org
+// @connect     cdn.plot.ly
+// @connect     code.jquery.com
+// @connect     cdn.datatables.net
+// @connect     *.pythonanywhere.com
 // @grant       GM_setValue
 // @grant       GM_addStyle
 // @grant       GM_getValue
@@ -20,14 +21,14 @@
 // @grant       GM_info
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.114202
+// @version     1.114204
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // ==/UserScript==
 
 const VTT_SCRIPT_VERSION = typeof GM_info !== 'undefined' && GM_info?.script?.version
   ? String(GM_info.script.version)
-  : '1.114202';
+  : '1.114204';
 
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
@@ -1483,6 +1484,8 @@ GM_addStyle(`
                 })
                 .then(async () => {
                   if (requestedRevision !== dashboardRefreshRevision) return { skipped: true };
+                  if (!document.getElementById('vtt-storage-value')
+                    && document.getElementById('data-table')?.dataset.rendered !== 'true') return { skipped: true };
                   const list = await load_all_asin_etv_values_from_storage(false);
                   if (requestedRevision !== dashboardRefreshRevision) return { skipped: true };
                   const dataTable = document.getElementById('data-table');
@@ -2615,6 +2618,44 @@ GM_addStyle(`
                 });
               }
 
+              // Only Dexie is needed to capture orders. Load analysis/import libraries
+              // in the userscript sandbox when their feature is actually used.
+              const optionalLibraries = {
+                XLSX: ['https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js', 'XLSX'],
+                d3: ['https://d3js.org/d3.v5.min.js', 'd3'],
+                Plotly: ['https://cdn.plot.ly/plotly-1.58.5.min.js', 'Plotly'],
+                jQuery: ['https://code.jquery.com/jquery-3.5.1.js', 'jQuery'],
+                DataTable: ['https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js', 'jQuery.fn.DataTable']
+              };
+              const libraryLoads = new Map();
+              function loadOptionalLibrary(name) {
+                if (!Object.hasOwn(optionalLibraries, name)) {
+                  return Promise.reject(new Error('Unknown optional library.'));
+                }
+                const [url, globalPath] = optionalLibraries[name];
+                const available = () => globalPath.split('.').reduce((value, key) => value?.[key], globalThis);
+                if (available()) return Promise.resolve(available());
+                if (!libraryLoads.has(name)) {
+                  const loading = (async () => {
+                    if (name === 'DataTable') await loadOptionalLibrary('jQuery');
+                    const response = await gmRequest({ method: 'GET', url });
+                    // These are the same pinned scripts previously executed via @require.
+                    // Disable CommonJS detection so each library uses its browser export.
+                    const root = globalPath.split('.')[0];
+                    const exported = new Function('module', 'exports', 'define',
+                      `${response.responseText}\n;return typeof ${root} !== 'undefined' ? ${root} : window.${root};`
+                    ).call(globalThis, undefined, undefined, undefined);
+                    globalThis[root] = exported;
+                    if (name === 'jQuery') globalThis.$ = exported;
+                    if (!available()) throw new Error(`${name} could not be initialized.`);
+                    return available();
+                  })();
+                  libraryLoads.set(name, loading);
+                  loading.catch(() => libraryLoads.delete(name));
+                }
+                return libraryLoads.get(name);
+              }
+
               async function postJson(url, body) {
                 const response = await gmRequest({
                   method: 'POST',
@@ -2878,18 +2919,21 @@ GM_addStyle(`
                   );
                 }
 
-                async pushV2Outbox(config, generationId, capabilities = {}) {
+                async pushV2Outbox(config, generationId, capabilities = {}, entityIds = null) {
                   await this.restoreStaleInflightOutbox(config.profileId);
 
                   let pushed = 0;
                   let rejected = 0;
                   let exchanged = false;
-                  const supportsExchange = capabilities.features?.push_pull_exchange === true;
+                  const supportsExchange = !entityIds && capabilities.features?.push_pull_exchange === true;
                   while (true) {
-                    const allPending = (await db.outbox
-                      .where('[profileId+status]')
-                      .equals([config.profileId, 'pending'])
-                      .toArray())
+                    const allPending = (entityIds
+                      ? (await Promise.all(entityIds.map(asin => db.outbox
+                          .where('[profileId+entityType+entityId]')
+                          .equals([config.profileId, 'product', asin])
+                          .toArray()))).flat().filter(mutation => mutation.status === 'pending')
+                      : await db.outbox.where('[profileId+status]')
+                          .equals([config.profileId, 'pending']).toArray())
                       .sort(compareOutboxMutationOrder);
                     if (allPending.length === 0) break;
                     const seenEntities = new Set();
@@ -4315,9 +4359,9 @@ GM_addStyle(`
                   return products;
                 }
 
-                async syncProductsBatch(products) {
+                async syncProductsBatch(products, { visibleOnly = false } = {}) {
                   const lastFullSync = await getValue('last_full_sync', 0);
-                  const needFullSync = Date.now() - Number(lastFullSync || 0) > 7 * 24 * 60 * 60 * 1000;
+                  const needFullSync = !visibleOnly && Date.now() - Number(lastFullSync || 0) > 7 * 24 * 60 * 60 * 1000;
                   const sourceProducts = needFullSync ? await this.readAllProducts() : products;
                   const estimatorProducts = sourceProducts.filter(
                     product => needFullSync || product.teilwert_v2 == null
@@ -4398,7 +4442,41 @@ GM_addStyle(`
                     try {
                       const protocol = await this.detectPrivateProtocol(config);
                       if (protocol.mode === 'v2') {
-                        const result = await this.syncPrivateV2(config, protocol.capabilities);
+                        const result = visibleOnly
+                          ? await this.withCrossTabSyncLock(config.profileId, async () => {
+                              const generationId = protocol.capabilities.generation_id || protocol.capabilities.generationId;
+                              const state = await db.syncState.get(config.profileId);
+                              if (!generationId || (state?.generationId && state.generationId !== generationId)) {
+                                throw new Error('Bitte die Konto-Seite öffnen, um den Serverstand abzugleichen.');
+                              }
+                              // Push only these orders. Bootstrap, pulls, repairs and integrity
+                              // snapshots belong to the account page's full synchronization.
+                              const asins = [...new Set(sourceProducts.map(product => normalizeAsin(product.ASIN)).filter(Boolean))];
+                              const result = await this.pushV2Outbox(config, generationId, protocol.capabilities, asins);
+                              if (result.rejected > 0) {
+                                await db.syncState.put({
+                                  ...(await db.syncState.get(config.profileId)),
+                                  profileId: config.profileId,
+                                  serverRepairRequired: true
+                                });
+                                throw new Error('Bitte die Konto-Seite öffnen, um abgewiesene Änderungen abzugleichen.');
+                              }
+                              if (result.pushed > 0) {
+                                await db.syncState.put({
+                                  ...(await db.syncState.get(config.profileId)),
+                                  profileId: config.profileId,
+                                  remoteDeleteRecovery: false,
+                                  recoveryReleasedAt: Date.now()
+                                });
+                              }
+                              const pending = (await Promise.all(asins.map(asin => db.outbox
+                                .where('[profileId+entityType+entityId]')
+                                .equals([config.profileId, 'product', asin]).count())))
+                                .reduce((sum, count) => sum + count, 0);
+                              if (pending > 0) throw new Error(`${pending} Bestelländerung(en) warten auf einen erneuten Sync.`);
+                              return result;
+                            })
+                          : await this.syncPrivateV2(config, protocol.capabilities);
                         const openConflictCount = await db.conflicts
                           .where('[profileId+status]')
                           .equals([config.profileId, 'open'])
@@ -4483,6 +4561,11 @@ GM_addStyle(`
                   }
 
                   return { estimatorCount: anonPayload.length, privateSync: Boolean(config) };
+                }
+
+                syncOrdersProducts(products) {
+                  if (products.length === 0) return Promise.resolve({ skipped: true });
+                  return this.enqueue(() => this.syncProductsBatch(products, { visibleOnly: true }));
                 }
 
                 syncProducts(products) {
@@ -5452,6 +5535,7 @@ GM_addStyle(`
                 });
 
                 document.getElementById('export-xlsx').addEventListener('click', async () => {
+                    await loadOptionalLibrary('XLSX');
                     let asinData = await load_all_asin_etv_values_from_storage(false);
 
                     const settings = await getSettings();
@@ -5778,6 +5862,7 @@ GM_addStyle(`
   }
 
   async function createETVPlot(taxYear, items, endDate, parentElement) {
+      await loadOptionalLibrary('Plotly');
     const cancelledAsins = await getValue("cancellations", []);
     const settings = await getSettings();
     // Filter out items with etv === 0
@@ -5913,6 +5998,7 @@ GM_addStyle(`
 }
 
 async function createPieChart(list, parentElement) {
+      await loadOptionalLibrary('d3');
     const cancelledAsins = await getValue("cancellations", []);
     const settings = await getSettings();
 
@@ -5997,6 +6083,7 @@ async function createPieChart(list, parentElement) {
     }
 }
   async function createTeilwertSummaryTable(list, parentElement) {
+      await loadOptionalLibrary('d3');
       const cancelledAsins = await getValue("cancellations", []);
       let filteredList = list.filter(item => !cancelledAsins.includes(item.ASIN));
 
@@ -6215,6 +6302,7 @@ async function createPieChart(list, parentElement) {
               }
 
               async function parseExcel(data) {
+                  await loadOptionalLibrary('XLSX');
                   const binary = atob(data);
                   const binaryLength = binary.length;
                   const bytesArray = new Uint8Array(binaryLength);
@@ -6337,7 +6425,7 @@ async function createPieChart(list, parentElement) {
                   return {data, errors};
               }
 
-              async function saveData(data, sync = false) {
+              async function saveData(data, sync = false, { visibleOnly = false } = {}) {
                   const products = [];
                   if (!data || typeof data !== 'object' || Array.isArray(data)) {
                       throw new Error('Ungültige Produktdaten.');
@@ -6354,7 +6442,8 @@ async function createPieChart(list, parentElement) {
                   }
                   if (sync) {
                       try {
-                          await backendHandler.syncProducts(products);
+                          if (visibleOnly) await backendHandler.syncOrdersProducts(products);
+                          else await backendHandler.syncProducts(products);
                       } catch (error) {
                           error.localDataSaved = true;
                           throw error;
@@ -6399,21 +6488,69 @@ async function createPieChart(list, parentElement) {
                    }
                }
 
-                async function loadOrdersInfo() {
+                function waitForOrdersTable({ timeoutMs = 30000 } = {}) {
+                    const readReadyTable = () => {
+                        if (document.querySelectorAll('.vvp-orders-table--row').length === 0) return null;
+                        const result = parseOrdersTable();
+                        return result.errors.length === 0 ? result : null;
+                    };
+                    const ready = readReadyTable();
+                    if (ready) return Promise.resolve(ready);
+
+                    // Amazon hydrates the date cells after DOMContentLoaded. Import only a
+                    // complete snapshot, using its rendered calendar dates rather than
+                    // interpreting raw Unix timestamps in a potentially different timezone.
+                    return new Promise((resolve, reject) => {
+                        let observer, timeout, settled = false;
+                        const finish = (result, error) => {
+                            if (settled) return;
+                            settled = true;
+                            observer?.disconnect();
+                            clearTimeout(timeout);
+                            if (error) reject(error);
+                            else resolve(result);
+                        };
+                        const check = () => {
+                            const result = readReadyTable();
+                            if (result) finish(result);
+                        };
+                        observer = new MutationObserver(check);
+                        observer.observe(document.documentElement, {
+                            childList: true, subtree: true, characterData: true,
+                            attributes: true, attributeFilter: ['data-order-timestamp', 'href']
+                        });
+                        timeout = setTimeout(() => finish(null, new Error(
+                            'Amazon hat die Bestelltabelle noch nicht vollständig geladen. '
+                            + 'Bitte warten und „Load Orders Info“ erneut anklicken. Es wurden keine Bestellungen importiert.'
+                        )), timeoutMs);
+                        check(); // Covers hydration between the initial read and observer registration.
+                    });
+                }
+
+                let ordersImportPromise = null;
+                function loadOrdersInfo() {
+                    if (ordersImportPromise) return ordersImportPromise;
+                    ordersImportPromise = importOrdersInfo().finally(() => {
+                        ordersImportPromise = null;
+                    });
+                    return ordersImportPromise;
+                }
+
+                async function importOrdersInfo() {
+                    const button = document.getElementById('load-orders-info');
+                    if (button) button.disabled = true;
                     try {
                         setAutomaticSyncStep(1, 'Amazon-Bestellimport wird vorbereitet ...', 1);
+                        setAutomaticSyncStep(2, 'Warte auf vollständige Amazon-Bestelldaten und Datumsangaben ...', 0.05);
+                        const {data} = await waitForOrdersTable();
                         setAutomaticSyncStep(2, 'Bestellzeilen werden gelesen und lokal gespeichert ...', 0.15);
-                        const {data, errors} = parseOrdersTable();
-                        await saveData(data, true);
+                        await saveData(data, true, { visibleOnly: true });
 
                         setAutomaticSyncStep(
                           6,
                           `${Object.keys(data).length} erkannte Bestellungen werden abschließend geprüft ...`,
                           1
                         );
-                        if (errors.length > 0) {
-                            alert('Fehler beim Erkennen des Datums bei ' + errors.length + ' Bestellung(en).');
-                        }
                         setAutomaticSyncStep(
                           7,
                           `Abgeschlossen. ${Object.keys(data).length} Bestellungen wurden lokal gespeichert und synchronisiert.`,
@@ -6431,6 +6568,7 @@ async function createPieChart(list, parentElement) {
                           "error"
                         );
                     } finally {
+                        if (button) button.disabled = false;
                         requestDashboardRefresh().catch(refreshError => {
                           console.error('Could not refresh the dashboard after order import:', refreshError);
                         });
@@ -6458,11 +6596,9 @@ async function createPieChart(list, parentElement) {
       container.parentNode.insertBefore(div, container.nextSibling);
       setAutomaticSyncStep(1, 'Amazon-Bestellimport wird vorbereitet ...', 0.25);
 
-      setTimeout(async () => {
-          document.getElementById('load-orders-info').addEventListener('click', loadOrdersInfo);
-          document.getElementById('show-all-data').addEventListener('click', showAllData);
-          await loadOrdersInfo();
-      }, 200);
+      document.getElementById('load-orders-info').addEventListener('click', loadOrdersInfo);
+      document.getElementById('show-all-data').addEventListener('click', () => showAllData());
+      return loadOrdersInfo();
   }
 
   async function copyPDFList() {
@@ -6530,6 +6666,7 @@ async function createPieChart(list, parentElement) {
       }
 
       try {
+          await loadOptionalLibrary('DataTable');
           const allAsinData = Array.isArray(options.sourceData)
             ? options.sourceData
             : await load_all_asin_etv_values_from_storage(false);
@@ -6767,6 +6904,7 @@ async function createPieChart(list, parentElement) {
 
 
   async function createCancellationRatioTable(list, parentElement) {
+      await loadOptionalLibrary('d3');
       const yearlyData = {};
       const cancelledAsins = await getValue("cancellations", []);
 
@@ -6848,6 +6986,12 @@ async function createPieChart(list, parentElement) {
                 && globalThis.__VINE_TAX_TOOLS_TEST_HOOK__
               ) {
                   Object.assign(globalThis.__VINE_TAX_TOOLS_TEST_HOOK__, {
+                      loadOptionalLibrary,
+                      startPage,
+                      loadOrdersInfo,
+                      parseOrdersTable,
+                      waitForOrdersTable,
+                      requestDashboardRefresh,
                       PrivateBackendHandler,
                       backendHandler,
                       db,
@@ -6894,18 +7038,19 @@ async function createPieChart(list, parentElement) {
                   });
               }
 
-              var currentPageURL = window.location.href;
-
-              if (currentPageURL.includes("https://www.amazon.de/vine/account")) {
-                  window.addEventListener('load', async function() {
-                    await validateAndFixDatabase();
-                    setTimeout(createUI_taxextractor, 1000);
-                    });
-              } else if (currentPageURL.includes("https://www.amazon.de/vine/orders")) {
-                    window.addEventListener('load', async function() {
-                        await validateAndFixDatabase();
-                        setTimeout(createUIorderpage, 500);
-                    });
+              function startPage() {
+                const currentPageURL = window.location.href;
+                if (currentPageURL.startsWith('https://www.amazon.de/vine/orders')) {
+                  return createUIorderpage();
+                }
+                if (currentPageURL.startsWith('https://www.amazon.de/vine/account')) {
+                  return validateAndFixDatabase().then(createUI_taxextractor);
+                }
+              }
+              if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', startPage, { once: true });
+              } else {
+                startPage();
               }
 
   })();

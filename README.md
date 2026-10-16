@@ -51,6 +51,16 @@ Internetverbindung benötigt.
 **Funktionalität:**
 - Dieses Skript sammelt Informationen auf folgenden Seiten von [vine.amazon.de](https://vine.amazon.de):
   - **Bestellseite**: Hier werden Produktdaten gesammelt der angezeigten 10 Bestellungen.
+    Der automatische Import speichert und übermittelt nur die sichtbaren Bestellungen.
+    Ein fälliger Wochenabgleich sowie V2-Downloads, Reparaturen und vollständige
+    Serverprüfungen laufen auf der Konto-Seite. Tabellen-, Diagramm- und
+    XLSX-Bibliotheken werden erst geladen, wenn die jeweilige Funktion genutzt wird.
+    Da Amazon die Datumsangaben erst nachträglich per JavaScript einsetzt, wartet
+    der Import ereignisgesteuert auf vollständige sichtbare Bestellzeilen (maximal
+    30 Sekunden). Bereits fertige Tabellen werden sofort importiert. Bei einem
+    Timeout werden keine unvollständigen Bestellungen gespeichert oder gesendet;
+    „Load Orders Info“ erlaubt einen erneuten Versuch. Parallele Importaufrufe
+    werden zu einem Lauf zusammengefasst.
   - **Konto-Seite**: Bitte das Jahr, das geladen werden soll, auswählen und auf "Load XLSX Info" klicken. Im Hintergrund wird nun die Steuer-xlsx-Datei von Amazon geladen, ausgewertet und in eine lokale Datenbank auf deinem Computer geschrieben.
 - **Auf hutaufs Server übermittelte Informationen:**
   - **ASIN**: Produkt-ID.

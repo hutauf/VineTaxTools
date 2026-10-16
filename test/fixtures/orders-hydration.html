@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="de">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VineTaxTools · delayed order dates</title>
+<style>
+  body { margin: 18px; background: #edf1f4; color: #18222d; font: 14px/1.5 system-ui; }
+  h1 { font-size: 23px; line-height: 1.2; }
+  p { color: #4a6077; }
+  table { width: 100%; background: white; border-collapse: collapse; }
+  td, th { padding: 10px 6px; border-bottom: 1px solid #d7dfe7; text-align: left; font-size: 11px; }
+  a { color: #235b88; }
+  output { display: block; margin: 14px 0; padding: 12px; border-radius: 8px; background: #dce9f5; }
+</style>
+<h1>Amazon-Bestelldaten treffen später ein</h1>
+<p>Synthetische Browser-Fixture: zehn Bestellungen, verzögerte Datumsanzeige, simuliertes Backend. Keine echten Nutzerdaten.</p>
+<table class="a-normal vvp-orders-table">
+  <thead><tr><th>Produkt</th><th>Bestelldatum</th><th>ETV</th></tr></thead>
+  <tbody id="orders"></tbody>
+</table>
+<output id="fixture-evidence">Warte auf Datumsangaben …</output>
+<script>
+  window.module = { exports: {} };
+  window.__VINE_TAX_TOOLS_TEST_HOOK__ = {};
+  window.__fixtureRequests = [];
+  window.__fixtureAlerts = [];
+  window.__fixtureErrors = [];
+  window.__datesFilled = 0;
+  const updateEvidence = () => {
+    document.getElementById('fixture-evidence').textContent =
+      `${window.__datesFilled}/10 Datumsangaben · ${window.__fixtureRequests.length} Uploads · `
+      + `${window.__fixtureRequests.reduce((sum, request) => sum + request.length, 0)} Datensätze · `
+      + `${window.__fixtureAlerts.length} Fehlermeldungen`;
+  };
+  for (let i = 0; i < 10; i++) {
+    const asin = 'B' + String(i).padStart(9, '0');
+    document.getElementById('orders').insertAdjacentHTML('beforeend',
+      `<tr class="vvp-orders-table--row"><td><a href="https://www.amazon.de/dp/${asin}">`
+      + `<span class="a-truncate-full">Testprodukt ${i + 1}</span></a><br>`
+      + `<a href="?orderID=synthetic-${i}">Bestelldetails</a></td>`
+      + '<td class="vvp-orders-table--text-col" data-order-timestamp="1792065600000"></td>'
+      + '<td class="vvp-orders-table--text-col vvp-text-align-right">12,34 €</td></tr>');
+  }
+  window.__fillDate = index => {
+    document.querySelectorAll('[data-order-timestamp]')[index].textContent = '15.10.2026';
+    window.__datesFilled++;
+    updateEvidence();
+  };
+  window.GM_addStyle = css => {
+    const style = document.createElement('style');
+    style.textContent = css.replace(/@import[^;]+;/g, '');
+    document.head.appendChild(style);
+  };
+  window.GM_setClipboard = () => {};
+  window.GM_xmlhttpRequest = options => {
+    window.__fixtureRequests.push(JSON.parse(options.data));
+    updateEvidence();
+    setTimeout(() => options.onload({status: 200, responseText: '{"status":"success","existing_asins":[]}'}), 20);
+  };
+  window.alert = message => { window.__fixtureAlerts.push(message); updateEvidence(); };
+  window.addEventListener('error', event => window.__fixtureErrors.push(event.message));
+  updateEvidence();
+</script>
+</html>
