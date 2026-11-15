@@ -10,7 +10,7 @@
 // @connect     cdn.plot.ly
 // @connect     code.jquery.com
 // @connect     cdn.datatables.net
-// @connect     *.pythonanywhere.com
+// @connect     pythonanywhere.com
 // @grant       GM_setValue
 // @grant       GM_addStyle
 // @grant       GM_getValue
