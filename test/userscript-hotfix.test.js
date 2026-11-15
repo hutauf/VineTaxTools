@@ -19,7 +19,7 @@ const uiFixtureSource = fs.readFileSync(uiFixturePath, 'utf8');
 
 test('userscript metadata version is rendered in the generated box footer', () => {
   const metadataVersion = userscriptSource.match(/^\/\/ @version\s+(\S+)/m)?.[1];
-  assert.equal(metadataVersion, '1.114202');
+  assert.equal(metadataVersion, '1.114203');
   assert.match(userscriptSource, /const VTT_SCRIPT_VERSION =/);
   assert.match(userscriptSource, /Vine Tax Tools v\$\{escapeHtml\(VTT_SCRIPT_VERSION\)\}/);
   assert.match(userscriptSource, /class="vtt-version-footer"/);
@@ -66,9 +66,23 @@ class FakeTable {
     return value === undefined ? undefined : structuredClone(value);
   }
 
+  async bulkGet(keys) {
+    await this.ready();
+    return keys.map(key => {
+      const value = this.records.get(this.keyFor(key));
+      return value === undefined ? undefined : structuredClone(value);
+    });
+  }
+
   async delete(key) {
     await this.ready();
     this.records.delete(this.keyFor(key));
+  }
+
+  async bulkDelete(keys) {
+    await this.ready();
+    for (const key of keys) this.records.delete(this.keyFor(key));
+    return keys.length;
   }
 
   async update(key, changes) {
@@ -744,6 +758,130 @@ test('estimator retry is driven by a missing v2 value, not a missing PDF link', 
   assert.deepStrictEqual(requests, [[
     { ASIN: 'B087654321', name: 'Still missing v2', ETV: 20 }
   ]]);
+});
+
+test('estimator responses are applied through one local product batch', async () => {
+  const { api, context } = await loadUserscript();
+  const handler = new api.PrivateBackendHandler();
+  await api.setValue('last_full_sync', Date.now());
+  await api.setValue('ASIN_B012345678', JSON.stringify({
+    name: 'First product',
+    date: '01/01/2025',
+    etv: 10
+  }));
+  await api.setValue('ASIN_B087654321', JSON.stringify({
+    name: 'Second product',
+    date: '02/01/2025',
+    etv: 20
+  }));
+
+  context.GM_xmlhttpRequest = options => options.onload({
+    status: 200,
+    responseText: JSON.stringify({
+      status: 'success',
+      existing_asins: [
+        {
+          asin: 'b012345678',
+          keepa: 1,
+          teilwert: 5,
+          teilwert_v2: 4,
+          pdf: 'first.pdf'
+        },
+        {
+          asin: 'B087654321',
+          keepa: 2,
+          teilwert: 8,
+          teilwert_v2: 7,
+          pdf: 'second.pdf'
+        }
+      ]
+    })
+  });
+
+  const result = await handler.syncProductsBatch([
+    { ASIN: 'B012345678', name: 'First product', etv: 10, teilwert_v2: null },
+    { ASIN: 'B087654321', name: 'Second product', etv: 20, teilwert_v2: null }
+  ]);
+
+  assert.strictEqual(result.estimatorCount, 2);
+  assert.strictEqual(JSON.parse(await api.getValue('ASIN_B012345678')).teilwert_v2, 4);
+  assert.strictEqual(JSON.parse(await api.getValue('ASIN_B087654321')).teilwert_v2, 7);
+});
+
+test('product batch updates retain private outbox semantics', async () => {
+  const { api } = await loadUserscript();
+  await api.setValue('token', 'batch-writer-token');
+  await api.setValue('pythonanywherebackend', 'hutaufvine');
+  const profileId = api.buildLocalProfileId('batch-writer-token', 'hutaufvine');
+  await api.setValue('ASIN_B012345678', JSON.stringify({
+    name: 'First product',
+    date: '01/01/2025',
+    etv: 10
+  }));
+  await api.setValue('ASIN_B087654321', JSON.stringify({
+    name: 'Second product',
+    date: '02/01/2025',
+    etv: 20
+  }));
+  await api.db.outbox.where('profileId').equals(profileId).delete();
+
+  await api.updateStoredProductsBatch([
+    {
+      asin: 'B012345678',
+      updater: current => ({ ...current, teilwert_v2: 4 })
+    },
+    {
+      asin: 'B087654321',
+      updater: current => ({ ...current, teilwert_v2: 7 })
+    }
+  ]);
+
+  const mutations = await api.db.outbox.where('profileId').equals(profileId).toArray();
+  assert.strictEqual(mutations.length, 2);
+  assert.deepStrictEqual(
+    mutations.map(mutation => mutation.entityId).sort(),
+    ['B012345678', 'B087654321']
+  );
+});
+
+test('product batch writer works with the production Dexie compound key', async () => {
+  await RealDexie.delete('myDatabase');
+  let api;
+  try {
+    ({ api } = await loadUserscript({ DexieImpl: RealDexie }));
+    await api.setValue('token', 'real-batch-writer-token');
+    await api.setValue('pythonanywherebackend', 'hutaufvine');
+    const profileId = api.buildLocalProfileId('real-batch-writer-token', 'hutaufvine');
+    await api.setValue('ASIN_B012345678', JSON.stringify({
+      name: 'First product',
+      date: '01/01/2025',
+      etv: 10
+    }));
+    await api.setValue('ASIN_B087654321', JSON.stringify({
+      name: 'Second product',
+      date: '02/01/2025',
+      etv: 20
+    }));
+
+    await api.updateStoredProductsBatch([
+      { asin: 'B012345678', updater: current => ({ ...current, teilwert_v2: 4 }) },
+      { asin: 'B087654321', updater: current => ({ ...current, teilwert_v2: 7 }) }
+    ]);
+
+    const rows = await api.db.products.where('profileId').equals(profileId).toArray();
+    assert.strictEqual(rows.length, 2);
+    assert.deepStrictEqual(
+      rows.map(row => row.data.teilwert_v2).sort((left, right) => left - right),
+      [4, 7]
+    );
+    assert.strictEqual(
+      await api.db.outbox.where('profileId').equals(profileId).count(),
+      2
+    );
+  } finally {
+    api?.db?.close();
+    await RealDexie.delete('myDatabase');
+  }
 });
 
 test('public estimator and private v1 DTOs retain their existing shapes', async () => {
@@ -2561,7 +2699,7 @@ test('account startup sync and orders autoload are explicit while the storage lo
   const progressAttachedAt = accountStart.indexOf("progressSlot.appendChild(progressBar.element)");
   const localLoadAt = accountStart.indexOf('await load_all_asin_etv_values_from_storage');
   const syncAt = accountStart.indexOf('await backendHandler.syncProducts(list)');
-  const yearlyBreakdownAt = accountStart.indexOf('requestDashboardRefresh()', syncAt);
+  const yearlyBreakdownAt = accountStart.indexOf('requestDashboardRefresh(list)', syncAt);
   const completedAt = accountStart.indexOf('Abgeschlossen. ${list.length} lokale Produkte sind bereit.');
 
   assert.ok(progressCreatedAt >= 0);

@@ -20,14 +20,14 @@
 // @grant       GM_info
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.114202
+// @version     1.114203
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // ==/UserScript==
 
 const VTT_SCRIPT_VERSION = typeof GM_info !== 'undefined' && GM_info?.script?.version
   ? String(GM_info.script.version)
-  : '1.114202';
+  : '1.114203';
 
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
@@ -1064,6 +1064,8 @@ GM_addStyle(`
             let tableRenderRevision = 0;
             let backendUiBusy = false;
             const productUpdateQueues = new Map();
+            let activeProfileCache = null;
+            let activeProfileResolution = null;
             let progressBarController = null;
 
             function normalizeSettings(value) {
@@ -1101,9 +1103,16 @@ GM_addStyle(`
               return `${(safeBytes / (1024 ** 2)).toFixed(safeBytes < 10 * 1024 ** 2 ? 2 : 1)} MB`;
             }
 
-            async function getLocalProductDatabaseStats() {
-              const profileId = await getActiveProfileId();
-              const productRecords = await db.products.where('profileId').equals(profileId).toArray();
+            async function getLocalProductDatabaseStats(productData = null) {
+              const productRecords = Array.isArray(productData)
+                ? productData.map(product => {
+                  const data = { ...product };
+                  const sourceAsin = data.ASIN;
+                  const asin = normalizeAsin(sourceAsin);
+                  delete data.ASIN;
+                  return { asin: asin || sourceAsin, data };
+                })
+                : await getLocalProductRows();
               const bytes = productRecords.reduce(
                 (sum, record) => sum
                   + getUtf8ByteLength(`ASIN_${record.asin}`)
@@ -1206,10 +1215,10 @@ GM_addStyle(`
               ].join(' · ');
             }
 
-            async function refreshDashboardStatusCards() {
+            async function refreshDashboardStatusCards(options = {}) {
               const requestedRevision = ++dashboardStatusRevision;
               const [stats, token, backendName] = await Promise.all([
-                getLocalProductDatabaseStats(),
+                options.stats || getLocalProductDatabaseStats(options.productData),
                 getValue('token'),
                 getValue('pythonanywherebackend', 'hutaufvine')
               ]);
@@ -1475,7 +1484,7 @@ GM_addStyle(`
               return savedSettings;
             }
 
-            function requestDashboardRefresh() {
+            function requestDashboardRefresh(sourceData = null) {
               const requestedRevision = ++dashboardRefreshRevision;
               dashboardRefreshQueue = dashboardRefreshQueue
                 .catch(error => {
@@ -1483,7 +1492,9 @@ GM_addStyle(`
                 })
                 .then(async () => {
                   if (requestedRevision !== dashboardRefreshRevision) return { skipped: true };
-                  const list = await load_all_asin_etv_values_from_storage(false);
+                  const list = Array.isArray(sourceData)
+                    ? sourceData
+                    : await load_all_asin_etv_values_from_storage(false);
                   if (requestedRevision !== dashboardRefreshRevision) return { skipped: true };
                   const dataTable = document.getElementById('data-table');
                   if (dataTable?.dataset.rendered === 'true') {
@@ -1492,7 +1503,7 @@ GM_addStyle(`
                   if (document.getElementById('vtt-analysis-content')) {
                     await createYearlyBreakdown(list);
                   }
-                  await refreshDashboardStatusCards();
+                  await refreshDashboardStatusCards({ productData: list });
                   return { refreshed: true };
                 });
               return dashboardRefreshQueue;
@@ -1522,6 +1533,9 @@ GM_addStyle(`
                 return;
               }
               await db.keyValuePairs.put({ key, value });
+              if (key === 'token' || key === 'pythonanywherebackend') {
+                activeProfileCache = null;
+              }
             }
 
             async function getValue(key, defaultValue = null) {
@@ -1536,27 +1550,46 @@ GM_addStyle(`
               return result ? result.value : defaultValue;
             }
 
-            async function getActiveProfileId() {
-              const [tokenRecord, backendRecord] = await Promise.all([
-                db.keyValuePairs.get('token'),
-                db.keyValuePairs.get('pythonanywherebackend')
-              ]);
-              const token = typeof tokenRecord?.value === 'string' ? tokenRecord.value.trim() : '';
-              const backendName = String(backendRecord?.value || 'hutaufvine').trim().toLowerCase();
-              const profileId = buildLocalProfileId(token, backendName);
-              if (!await db.profiles.get(profileId)) {
-                await db.profiles.put({
-                  id: profileId,
-                  kind: token ? 'private-backend' : 'local-only',
-                  backendName,
-                  backendUrl: token && isValidBackendName(backendName)
-                    ? getPrivateBackendUrl(backendName)
-                    : null,
-                  tokenFingerprint: token ? getTokenProfileFingerprint(token) : null,
-                  createdAt: Date.now()
-                });
+            async function getActiveProfileId(options = {}) {
+              const forceRefresh = options?.forceRefresh === true;
+              if (!forceRefresh && activeProfileCache) return activeProfileCache.profileId;
+              if (!forceRefresh && activeProfileResolution) return activeProfileResolution;
+
+              const resolution = (async () => {
+                const [tokenRecord, backendRecord] = await Promise.all([
+                  db.keyValuePairs.get('token'),
+                  db.keyValuePairs.get('pythonanywherebackend')
+                ]);
+                const token = typeof tokenRecord?.value === 'string' ? tokenRecord.value.trim() : '';
+                const backendName = String(backendRecord?.value || 'hutaufvine').trim().toLowerCase();
+                const profileId = buildLocalProfileId(token, backendName);
+                if (!await db.profiles.get(profileId)) {
+                  await db.profiles.put({
+                    id: profileId,
+                    kind: token ? 'private-backend' : 'local-only',
+                    backendName,
+                    backendUrl: token && isValidBackendName(backendName)
+                      ? getPrivateBackendUrl(backendName)
+                      : null,
+                    tokenFingerprint: token ? getTokenProfileFingerprint(token) : null,
+                    createdAt: Date.now()
+                  });
+                }
+                activeProfileCache = { profileId, token, backendName };
+                return profileId;
+              })();
+
+              if (!forceRefresh) activeProfileResolution = resolution;
+              try {
+                return await resolution;
+              } finally {
+                if (activeProfileResolution === resolution) activeProfileResolution = null;
               }
-              return profileId;
+            }
+
+            async function getLocalProductRows(profileId = null) {
+              const resolvedProfileId = profileId || await getActiveProfileId();
+              return db.products.where('profileId').equals(resolvedProfileId).toArray();
             }
 
             async function deleteStoredProduct(asinValue, profileId = null) {
@@ -1637,6 +1670,286 @@ GM_addStyle(`
                 if (productUpdateQueues.get(asin) === queued) {
                   productUpdateQueues.delete(asin);
                 }
+              });
+            }
+
+            function enqueueProductBatchOperation(asinValues, operation) {
+              const asins = Array.from(new Set(
+                (Array.isArray(asinValues) ? asinValues : [])
+                  .map(normalizeAsin)
+                  .filter(Boolean)
+              ));
+              if (asins.length === 0) return Promise.resolve([]);
+
+              const previousOperations = asins.map(asin => (
+                productUpdateQueues.get(asin) || Promise.resolve()
+              ));
+              let batchResult;
+              const ready = Promise.all(
+                previousOperations.map(previous => previous.catch(() => undefined))
+              ).then(() => operation());
+              batchResult = ready.finally(() => {
+                for (const asin of asins) {
+                  if (productUpdateQueues.get(asin) === batchResult) {
+                    productUpdateQueues.delete(asin);
+                  }
+                }
+              });
+              for (const asin of asins) productUpdateQueues.set(asin, batchResult);
+              return batchResult;
+            }
+
+            function normalizeProductBatchUpdates(updates) {
+              const byAsin = new Map();
+              for (const update of Array.isArray(updates) ? updates : []) {
+                const asin = normalizeAsin(update?.asin || update?.ASIN);
+                if (!asin || typeof update?.updater !== 'function') continue;
+                byAsin.set(asin, {
+                  asin,
+                  updater: update.updater,
+                  options: update.options || {}
+                });
+              }
+              return Array.from(byAsin.values());
+            }
+
+            function reconcileProductOutboxState({
+              profileId,
+              asin,
+              existingRow,
+              normalized,
+              options,
+              shadow,
+              entityMutations,
+              openConflicts
+            }) {
+              const directDiff = diffTopLevelFields(existingRow?.data || {}, normalized);
+              const hasDirectDiff = Object.keys(directDiff.set).length > 0 || directDiff.unset.length > 0;
+              const actions = {
+                outboxPuts: [],
+                outboxDeletes: [],
+                conflictPuts: []
+              };
+              if (
+                options?.queueOutbox === false
+                || profileId === 'local-only'
+                || !hasDirectDiff
+              ) {
+                return actions;
+              }
+
+              if (openConflicts.length > 0) {
+                for (const conflict of openConflicts) {
+                  const localFollowupMutations = [
+                    ...(Array.isArray(conflict.localFollowupMutations)
+                      ? conflict.localFollowupMutations
+                      : [])
+                  ];
+                  localFollowupMutations.push({
+                    operation: 'patch',
+                    set: structuredCloneSafe(directDiff.set),
+                    unset: [...directDiff.unset],
+                    createdAt: Date.now()
+                  });
+                  actions.conflictPuts.push({
+                    ...conflict,
+                    localRecord: structuredCloneSafe(normalized),
+                    localFollowupMutations,
+                    localUpdatedAt: Date.now()
+                  });
+                }
+                return actions;
+              }
+
+              const orderedMutations = [...entityMutations].sort(compareOutboxMutationOrder);
+              const immutableMutations = orderedMutations.filter(item => (
+                item.status === 'inflight'
+                || item.status === 'sending'
+                || (item.status === 'pending' && Number(item.attempts || 0) > 0)
+              ));
+              const replaceablePending = orderedMutations.filter(item => (
+                item.status === 'pending' && Number(item.attempts || 0) === 0
+              ));
+              const anticipatedServer = structuredCloneSafe(shadow?.data || {});
+              for (const immutable of immutableMutations) {
+                if (immutable.operation === 'delete') {
+                  for (const key of Object.keys(anticipatedServer)) delete anticipatedServer[key];
+                } else {
+                  for (const [field, value] of Object.entries(immutable.set || {})) {
+                    anticipatedServer[field] = structuredCloneSafe(value);
+                  }
+                  for (const field of immutable.unset || []) delete anticipatedServer[field];
+                }
+              }
+
+              const desiredDiff = diffTopLevelFields(anticipatedServer, normalized);
+              if (Object.keys(desiredDiff.set).length === 0 && desiredDiff.unset.length === 0) {
+                actions.outboxDeletes.push(...replaceablePending.map(mutation => mutation.mutationId));
+              } else if (replaceablePending.length > 0) {
+                const [firstPending, ...duplicates] = replaceablePending;
+                actions.outboxPuts.push({
+                  ...firstPending,
+                  set: desiredDiff.set,
+                  unset: desiredDiff.unset,
+                  source: options?.source || 'local-edit',
+                  createdAt: Date.now(),
+                  updatedAt: Date.now()
+                });
+                actions.outboxDeletes.push(...duplicates.map(mutation => mutation.mutationId));
+              } else {
+                actions.outboxPuts.push(createOutboxMutation({
+                  profileId,
+                  entityType: 'product',
+                  entityId: asin,
+                  baseRevision: shadow?.recordRevision || existingRow?.recordRevision || 0,
+                  set: desiredDiff.set,
+                  unset: desiredDiff.unset,
+                  source: options?.source || 'local-edit'
+                }));
+              }
+              return actions;
+            }
+
+            async function applyStoredProductUpdatesBatchInTransaction(profileId, updates) {
+              const asins = updates.map(update => update.asin);
+              const productKeys = asins.map(asin => [profileId, asin]);
+              const needsOutbox = profileId !== 'local-only'
+                && updates.some(update => update.options?.queueOutbox !== false);
+              const [existingRows, shadowRows, outboxRows, conflictRows] = await Promise.all([
+                db.products.bulkGet(productKeys),
+                needsOutbox
+                  ? db.shadows.bulkGet(asins.map(asin => [profileId, 'product', asin]))
+                  : Promise.resolve([]),
+                needsOutbox
+                  ? db.outbox.where('profileId').equals(profileId).toArray()
+                  : Promise.resolve([]),
+                needsOutbox
+                  ? db.conflicts.where('profileId').equals(profileId).toArray()
+                  : Promise.resolve([])
+              ]);
+
+              const targetAsins = new Set(asins);
+              const existingByAsin = new Map(
+                existingRows.filter(Boolean).map(row => [row.asin, row])
+              );
+              const shadowsByAsin = new Map(
+                shadowRows.filter(Boolean).map(row => [row.entityId, row])
+              );
+              const outboxByAsin = new Map();
+              for (const mutation of outboxRows) {
+                const asin = normalizeAsin(mutation?.entityId);
+                if (mutation?.entityType !== 'product' || !targetAsins.has(asin)) continue;
+                const mutations = outboxByAsin.get(asin) || [];
+                mutations.push(mutation);
+                outboxByAsin.set(asin, mutations);
+              }
+              const conflictsByAsin = new Map();
+              for (const conflict of conflictRows) {
+                const asin = normalizeAsin(conflict?.entityId);
+                if (
+                  conflict?.entityType !== 'product'
+                  || conflict?.status !== 'open'
+                  || !targetAsins.has(asin)
+                ) continue;
+                const conflicts = conflictsByAsin.get(asin) || [];
+                conflicts.push(conflict);
+                conflictsByAsin.set(asin, conflicts);
+              }
+
+              const productRows = [];
+              const outboxPuts = new Map();
+              const outboxDeletes = new Set();
+              const conflictPuts = new Map();
+              const results = [];
+
+              for (const update of updates) {
+                const { asin, updater, options } = update;
+                const existingRow = existingByAsin.get(asin);
+                if (!existingRow && options.createIfMissing !== true) {
+                  results.push(null);
+                  continue;
+                }
+                const current = existingRow
+                  ? parseStoredProduct(structuredCloneSafe(existingRow.data), `local product ${asin}`)
+                  : {};
+                const candidate = updater(current, asin);
+                const resolvedCandidate = candidate && typeof candidate.then === 'function'
+                  ? await candidate
+                  : candidate;
+                const updated = resolvedCandidate === undefined ? current : resolvedCandidate;
+                if (!updated || typeof updated !== 'object' || Array.isArray(updated)) {
+                  throw new Error(`Ungültige Produktänderung für ${asin}.`);
+                }
+                const normalized = parseStoredProduct(updated, `local product ${asin}`);
+                productRows.push(createProductRow(
+                  profileId,
+                  asin,
+                  normalized,
+                  existingRow?.recordRevision || 0
+                ));
+                results.push(normalized);
+
+                const actions = reconcileProductOutboxState({
+                  profileId,
+                  asin,
+                  existingRow,
+                  normalized,
+                  options,
+                  shadow: shadowsByAsin.get(asin),
+                  entityMutations: outboxByAsin.get(asin) || [],
+                  openConflicts: conflictsByAsin.get(asin) || []
+                });
+                for (const mutation of actions.outboxPuts) {
+                  outboxPuts.set(mutation.mutationId, mutation);
+                  outboxDeletes.delete(mutation.mutationId);
+                }
+                for (const mutationId of actions.outboxDeletes) {
+                  outboxDeletes.add(mutationId);
+                  outboxPuts.delete(mutationId);
+                }
+                for (const conflict of actions.conflictPuts) {
+                  conflictPuts.set(conflict.id, conflict);
+                }
+              }
+
+              if (productRows.length > 0) await db.products.bulkPut(productRows);
+              if (outboxDeletes.size > 0) await db.outbox.bulkDelete(Array.from(outboxDeletes));
+              if (outboxPuts.size > 0) await db.outbox.bulkPut(Array.from(outboxPuts.values()));
+              if (conflictPuts.size > 0) await db.conflicts.bulkPut(Array.from(conflictPuts.values()));
+              return results;
+            }
+
+            function updateStoredProductsBatch(updates, options = {}) {
+              const normalizedUpdates = normalizeProductBatchUpdates(updates);
+              if (normalizedUpdates.length === 0) return Promise.resolve([]);
+              const asins = normalizedUpdates.map(update => update.asin);
+              const chunkSize = Math.max(1, Number(options.chunkSize) || 250);
+              return enqueueProductBatchOperation(asins, async () => {
+                const profileId = options.profileId || await getActiveProfileId();
+                const results = [];
+                for (let start = 0; start < normalizedUpdates.length; start += chunkSize) {
+                  const chunk = normalizedUpdates.slice(start, start + chunkSize);
+                  const chunkResults = await db.transaction(
+                    'rw',
+                    db.products,
+                    db.shadows,
+                    db.outbox,
+                    db.conflicts,
+                    () => applyStoredProductUpdatesBatchInTransaction(profileId, chunk)
+                  );
+                  results.push(...chunkResults);
+                  if (typeof options.onProgress === 'function') {
+                    try {
+                      options.onProgress(
+                        Math.min(start + chunk.length, normalizedUpdates.length),
+                        normalizedUpdates.length
+                      );
+                    } catch (error) {
+                      console.warn('Product batch progress callback failed.', error);
+                    }
+                  }
+                }
+                return results;
               });
             }
 
@@ -1755,8 +2068,7 @@ GM_addStyle(`
 
             async function getAllAsinValues() {
                 try {
-                    const profileId = await getActiveProfileId();
-                    const rows = await db.products.where('profileId').equals(profileId).toArray();
+                    const rows = await getLocalProductRows();
                     const asinDict = rows.reduce((acc, row) => {
                         acc[`ASIN_${row.asin}`] = JSON.stringify(row.data);
                         return acc;
@@ -1948,7 +2260,7 @@ GM_addStyle(`
                 const profileId = await getActiveProfileId();
                 const [keys, products] = await Promise.all([
                   db.keyValuePairs.toCollection().primaryKeys(),
-                  db.products.where('profileId').equals(profileId).toArray()
+                  getLocalProductRows(profileId)
                 ]);
                 return [
                   ...keys,
@@ -1965,29 +2277,34 @@ GM_addStyle(`
                 // Version 1.112001 briefly stored upload receipts that could suppress
                 // estimator polling. They are intentionally unused and removed again.
                 await db.keyValuePairs.delete('teilwert_estimator_acknowledgements_v1');
-                const keys = await listValues();
-                const asinKeys = keys.filter(key => key.startsWith("ASIN_"));
+                const profileId = await getActiveProfileId();
+                const productRows = await getLocalProductRows(profileId);
                 const invalidAsins = [];
                 const records = [];
 
-                for (const asinKey of asinKeys) {
-                  const sourceAsin = asinKey.slice(5);
+                for (const row of productRows) {
+                  const sourceAsin = row?.asin;
                   const asin = normalizeAsin(sourceAsin);
                   if (!asin) {
                     invalidAsins.push(sourceAsin);
-                    await deleteStoredProduct(sourceAsin);
                     console.log(`Removed invalid ASIN: ${sourceAsin}`);
                     continue;
                   }
-                  const stored = await getValue(asinKey);
-                  const valueObject = parseStoredProductDate(stored, `local product ${sourceAsin}`);
+                  const valueObject = parseStoredProductDate(
+                    row.data,
+                    `local product ${sourceAsin}`
+                  );
                   records.push({
                     asin,
                     sourceAsin,
-                    sourceKey: asinKey,
+                    sourceKey: `ASIN_${sourceAsin}`,
                     timestamp: Number(valueObject.last_update_time) || 0,
                     valueObject
                   });
+                }
+
+                if (invalidAsins.length > 0) {
+                  await db.products.bulkDelete(invalidAsins.map(asin => [profileId, asin]));
                 }
 
                 const canonicalEntries = mergeCanonicalProductRecords(records);
@@ -1996,10 +2313,10 @@ GM_addStyle(`
                   const needsCorrection = entry.variants.length > 1
                     || entry.variants.some(variant => variant.sourceAsin !== entry.asin);
                   if (!needsCorrection) continue;
-                  await setValue(`ASIN_${entry.asin}`, JSON.stringify(entry.valueObject));
+                  await db.products.put(createProductRow(profileId, entry.asin, entry.valueObject, 0));
                   for (const variant of entry.variants) {
                     if (variant.sourceKey !== `ASIN_${entry.asin}`) {
-                      await deleteStoredProduct(variant.sourceAsin);
+                      await db.products.delete([profileId, normalizeAsin(variant.sourceAsin)]);
                     }
                   }
                   correctedAsins++;
@@ -4305,12 +4622,15 @@ GM_addStyle(`
                 }
 
                 async readAllProducts() {
-                  const asinDataAll = await getAllAsinValues();
+                  const rows = await getLocalProductRows();
                   const products = [];
-                  for (const [key, value] of Object.entries(asinDataAll)) {
-                    const asin = normalizeAsin(key.slice(5));
+                  for (const row of rows) {
+                    const asin = normalizeAsin(row?.asin);
                     if (!asin) continue;
-                    products.push({ ...parseStoredProduct(value, `local product ${asin}`), ASIN: asin });
+                    products.push({
+                      ...parseStoredProduct(row.data, `local product ${asin}`),
+                      ASIN: asin
+                    });
                   }
                   return products;
                 }
@@ -4353,23 +4673,26 @@ GM_addStyle(`
                           : 'Die Teilwert-Antwort enthält keine lokalen Aktualisierungen.',
                         existingAsins.length ? 0 : 1
                       );
-                      for (let index = 0; index < existingAsins.length; index++) {
-                        const existingAsin = existingAsins[index];
-                        setAutomaticSyncStep(
-                          4,
-                          `Teilwert-Antwort ${index + 1}/${existingAsins.length} wird lokal geprüft ...`,
-                          (index + 1) / existingAsins.length
-                        );
-                        const asin = normalizeAsin(existingAsin?.asin);
-                        if (!asin) continue;
-                        await updateStoredProduct(asin, current => ({
+                      const estimatorUpdates = existingAsins.map(existingAsin => ({
+                        asin: existingAsin?.asin,
+                        updater: current => ({
                           ...current,
                           keepa: existingAsin.keepa,
                           teilwert: existingAsin.teilwert,
                           teilwert_v2: existingAsin.teilwert_v2,
                           pdf: existingAsin.pdf
-                        }));
-                      }
+                        })
+                      }));
+                      await updateStoredProductsBatch(estimatorUpdates, {
+                        chunkSize: 250,
+                        onProgress: (completed, total) => {
+                          setAutomaticSyncStep(
+                            4,
+                            `Teilwert-Antworten ${completed}/${total} werden lokal eingearbeitet ...`,
+                            total ? completed / total : 1
+                          );
+                        }
+                      });
                       if (needFullSync) {
                         await setValue('last_full_sync', Date.now());
                       }
@@ -4430,16 +4753,17 @@ GM_addStyle(`
                       } else {
                         const privatePayload = [];
                         const seenAsins = new Set();
-                        for (const product of sourceProducts) {
+                        const localProducts = await this.readAllProducts();
+                        for (const product of localProducts) {
                           const asin = normalizeAsin(product?.ASIN);
                           if (!asin || seenAsins.has(asin)) continue;
                           seenAsins.add(asin);
-                          const localValue = await getValue(`ASIN_${asin}`);
-                          if (!localValue) continue;
+                          const productData = { ...product };
+                          delete productData.ASIN;
                           privatePayload.push({
                             ASIN: asin,
                             timestamp: 0,
-                            value: JSON.stringify(parseStoredProduct(localValue, `local product ${asin}`))
+                            value: JSON.stringify(parseStoredProduct(productData, `local product ${asin}`))
                           });
                         }
                         if (privatePayload.length > 0) {
@@ -5005,25 +5329,29 @@ GM_addStyle(`
                     }
                   };
                   updateLocalLoadProgress('Lokale Produktdaten werden geöffnet ...', 0);
-                  let keys = await listValues();
-                  let asinKeys = keys.filter(key => key.startsWith("ASIN_"));
-
-                  let asinDataAll = await getAllAsinValues();
+                  const profileId = await getActiveProfileId();
+                  const productRows = await getLocalProductRows(profileId);
 
                   let asinData = [];
                   let errorDates = [];
+                  const progressStride = Math.max(25, Math.ceil(productRows.length / 100));
 
-                  for (let index = 0; index < asinKeys.length; index++) {
-                      const asinKey = asinKeys[index];
-                      let asin = asinKey.replace("ASIN_", "");
-                      updateLocalLoadProgress(
-                        `Lokale Produktdaten ${index + 1}/${asinKeys.length} werden geladen ...`,
-                        asinKeys.length ? ((index + 1) / asinKeys.length) : 1
-                      );
+                  for (let index = 0; index < productRows.length; index++) {
+                      const row = productRows[index];
+                      const asin = normalizeAsin(row?.asin);
+                      if (
+                        index === 0
+                        || index + 1 === productRows.length
+                        || (index + 1) % progressStride === 0
+                      ) {
+                        updateLocalLoadProgress(
+                          `Lokale Produktdaten ${index + 1}/${productRows.length} werden geladen ...`,
+                          productRows.length ? ((index + 1) / productRows.length) : 1
+                        );
+                      }
 
-                      let jsonData = asinDataAll[asinKey]; //await getValue(asinKey);
-
-                      let parsedData = parseStoredProduct(jsonData, `local product ${asin}`);
+                      if (!asin) continue;
+                      let parsedData = parseStoredProduct(row.data, `local product ${asin}`);
                       const normalizedDate = normalizeOrderDate(parsedData.date);
                       if (!normalizedDate) {
                         errorDates.push(parsedData.date);
@@ -5042,7 +5370,7 @@ GM_addStyle(`
                   }
 
                   updateLocalLoadProgress(
-                    asinKeys.length
+                    productRows.length
                       ? `${asinData.length} lokale Produkte wurden geladen.`
                       : 'Die lokale Produktdatenbank ist leer.',
                     1
@@ -5536,7 +5864,7 @@ GM_addStyle(`
                       });
                       // IndexedDB is the primary UI source. Render it immediately;
                       // the private backend refresh continues without blocking the dashboard.
-                      requestDashboardRefresh();
+                      requestDashboardRefresh(list);
 
                       let syncError = null;
                       try {
@@ -5550,7 +5878,7 @@ GM_addStyle(`
                       // so the first dashboard already reflects the response from this sync.
                       list = await load_all_asin_etv_values_from_storage(false);
                       setAutomaticSyncStep(6, 'Jahresauswertungen und aufklappbare Ansichten werden vorbereitet ...', 0);
-                      requestDashboardRefresh();
+                      requestDashboardRefresh(list);
                       await waitForDashboardRefreshIdle();
                       setAutomaticSyncStep(6, 'Lokale Auswertungen sind bereit; Diagramme laden beim Aufklappen.', 1);
 
@@ -6888,6 +7216,7 @@ async function createPieChart(list, parentElement) {
                       setValue,
                       showAllData,
                       updateStoredProduct,
+                      updateStoredProductsBatch,
                       getValue,
                       validateAndFixDatabase,
                       validateDatabaseImport
