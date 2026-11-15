@@ -21,14 +21,14 @@
 // @grant       GM_info
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.114207
+// @version     1.114208
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // ==/UserScript==
 
 const VTT_SCRIPT_VERSION = typeof GM_info !== 'undefined' && GM_info?.script?.version
   ? String(GM_info.script.version)
-  : '1.114207';
+  : '1.114208';
 
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
@@ -1488,6 +1488,7 @@ GM_addStyle(`
                     && document.getElementById('data-table')?.dataset.rendered !== 'true') return { skipped: true };
                   const list = await load_all_asin_etv_values_from_storage(false);
                   if (requestedRevision !== dashboardRefreshRevision) return { skipped: true };
+                  await refreshXlsxYearSelector(document.getElementById('load-xlsx-year'), list);
                   const dataTable = document.getElementById('data-table');
                   if (dataTable?.dataset.rendered === 'true') {
                     await showAllData({ openSection: false, sourceData: list });
@@ -1825,17 +1826,32 @@ GM_addStyle(`
                 });
             }
 
-            function ensureXlsxYearFallbackOption(selectEl) {
-                if (!selectEl) return;
-                if (selectEl.options.length === 0) {
-                    const currentYear = new Date().getFullYear();
-                    const startYear = deriveVineStartYear(2023);
-                    const years = [];
-                    for (let year = currentYear; year >= startYear; year--) {
-                        years.push(`<option value="${year}">${year}</option>`);
-                    }
-                    selectEl.innerHTML = years.join('');
+            function buildReportYearRange(amazonOptions = [], products = [], currentYear = new Date().getFullYear()) {
+                let minYear = currentYear;
+                let maxYear = currentYear;
+                const includeYear = year => {
+                    if (!Number.isInteger(year) || year <= 0) return;
+                    minYear = Math.min(minYear, year);
+                    maxYear = Math.max(maxYear, year);
+                };
+                for (const option of amazonOptions) includeYear(Number(option.value));
+                for (const product of products) {
+                    const date = parseDateSafe(product?.date);
+                    if (date) includeYear(date.getUTCFullYear());
                 }
+                const firstYear = Math.max(2009, minYear);
+                const lastYear = Math.min(currentYear, maxYear);
+                const years = [];
+                for (let year = lastYear; year >= firstYear; year--) years.push(year);
+                return years;
+            }
+
+            const xlsxYearSelectorStates = new WeakMap();
+            function getXlsxYearSelectorState(selectEl) {
+                if (!xlsxYearSelectorStates.has(selectEl)) {
+                    xlsxYearSelectorStates.set(selectEl, { products: [], revision: 0, observer: null });
+                }
+                return xlsxYearSelectorStates.get(selectEl);
             }
 
             function readAmazonYearOptions() {
@@ -1851,29 +1867,39 @@ GM_addStyle(`
             function syncXlsxYearSelectFromAmazon(selectEl) {
                 if (!selectEl) return false;
                 const amazonOptions = readAmazonYearOptions();
-                if (amazonOptions.length === 0) {
-                    ensureXlsxYearFallbackOption(selectEl);
-                    return false;
-                }
-
+                const state = getXlsxYearSelectorState(selectEl);
+                const years = buildReportYearRange(amazonOptions, state.products).map(String);
                 const previousValue = selectEl.value;
-                selectEl.innerHTML = amazonOptions
-                    .map(option => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`)
+                const optionsHtml = years
+                    .map(year => `<option value="${year}">${year}</option>`)
                     .join('');
+                if (selectEl.innerHTML !== optionsHtml) selectEl.innerHTML = optionsHtml;
 
                 const amazonSelected = amazonOptions.find(option => option.selected);
-                const preferredValue = previousValue || (amazonSelected ? amazonSelected.value : amazonOptions[0].value);
-                if (amazonOptions.some(option => option.value === preferredValue)) {
-                    selectEl.value = preferredValue;
-                } else {
-                    selectEl.value = amazonSelected ? amazonSelected.value : amazonOptions[0].value;
-                }
+                selectEl.value = years.includes(previousValue) ? previousValue
+                    : years.includes(amazonSelected?.value) ? amazonSelected.value : years[0];
                 return true;
+            }
+
+            async function refreshXlsxYearSelector(selectEl, products = null) {
+                if (!selectEl) return;
+                const state = getXlsxYearSelectorState(selectEl);
+                const revision = ++state.revision;
+                if (!Array.isArray(products)) {
+                    const profileId = await getActiveProfileId();
+                    const rows = await db.products.where('profileId').equals(profileId).toArray();
+                    products = rows.map(row => row.data);
+                }
+                // A slower initial read must not replace a newer import/sync result.
+                if (revision !== state.revision || !selectEl.isConnected) return;
+                state.products = products;
+                syncXlsxYearSelectFromAmazon(selectEl);
             }
 
             async function initializeXlsxYearSelector(selectEl) {
                 if (!selectEl) return;
-                ensureXlsxYearFallbackOption(selectEl);
+                const state = getXlsxYearSelectorState(selectEl);
+                state.observer?.disconnect();
                 // Amazon can add years in several hydration passes or replace
                 // the selector. One available year does not mean it is complete.
                 const sourceSelector = 'select#vvp-tax-year-dropdown';
@@ -1899,7 +1925,9 @@ GM_addStyle(`
                     childList: true, subtree: true, characterData: true,
                     attributes: true, attributeFilter: ['value', 'label', 'selected']
                 });
+                state.observer = observer;
                 syncXlsxYearSelectFromAmazon(selectEl);
+                await refreshXlsxYearSelector(selectEl);
             }
 
             function deriveVineStartYear(defaultStartYear = 2023) {
@@ -7021,7 +7049,8 @@ async function createPieChart(list, parentElement) {
                       db,
                       bindLocalProfileToPrivateProfile,
                       buildYearFilterOptionsHtml,
-                      ensureXlsxYearFallbackOption,
+                      buildReportYearRange,
+                      refreshXlsxYearSelector,
                       initializeXlsxYearSelector,
                       readAmazonYearOptions,
                       buildLocalProfileId,

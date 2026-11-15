@@ -19,7 +19,7 @@ const uiFixtureSource = fs.readFileSync(uiFixturePath, 'utf8');
 
 test('userscript metadata version is rendered in the generated box footer', () => {
   const metadataVersion = userscriptSource.match(/^\/\/ @version\s+(\S+)/m)?.[1];
-  assert.equal(metadataVersion, '1.114207');
+  assert.equal(metadataVersion, '1.114208');
   assert.match(userscriptSource, /const VTT_SCRIPT_VERSION =/);
   assert.match(userscriptSource, /Vine Tax Tools v\$\{escapeHtml\(VTT_SCRIPT_VERSION\)\}/);
   assert.match(userscriptSource, /class="vtt-version-footer"/);
@@ -2407,8 +2407,11 @@ test('UI settings keep backwards-compatible defaults for older partial records',
 
 function createYearSelect() {
   return {
-    options: [], value: '', isConnected: true,
+    options: [], value: '', isConnected: true, renders: 0,
+    get innerHTML() { return this.html || ''; },
     set innerHTML(html) {
+      this.html = html;
+      this.renders++;
       this.options = Array.from(html.matchAll(/<option value="([^"]+)">([^<]*)<\/option>/g),
         match => ({ value: match[1], textContent: match[2] }));
       this.value = this.options[0]?.value || '';
@@ -2416,14 +2419,45 @@ function createYearSelect() {
   };
 }
 
-test('report year fallback offers earlier years when Amazon has not rendered its selector', async () => {
+function reportYearsFrom(minYear, maxYear = new Date().getFullYear()) {
+  return Array.from({ length: maxYear - minYear + 1 }, (_, index) => String(maxYear - index));
+}
+
+test('report year range combines Amazon, product dates and today and fills gaps', async () => {
   const { api } = await loadUserscript();
+  const years = api.buildReportYearRange(
+    [{ value: '2024' }, { value: 'invalid' }],
+    [{ date: '02/03/2019' }, { date: '2022-12-31T23:00:00.000Z' }, { date: 'invalid' }],
+    2026
+  );
+  assert.deepEqual(Array.from(years, String), reportYearsFrom(2019, 2026));
+  assert.deepEqual(Array.from(api.buildReportYearRange([], [], 2026)), [2026]);
+});
+
+test('report year range clamps old data to 2009 and future data to the current year', async () => {
+  const { api } = await loadUserscript();
+  const years = api.buildReportYearRange(
+    [{ value: '2005' }, { value: '2030' }],
+    [{ date: '01/01/2001' }, { date: '01/01/2040' }], 2026
+  );
+  assert.deepEqual(Array.from(years, String), reportYearsFrom(2009, 2026));
+  assert.deepEqual(Array.from(api.buildReportYearRange([{ value: '2030' }], [], 2026)), [2026]);
+});
+
+test('report years include all products in the active profile and update after imports', async () => {
+  const { api } = await loadUserscript();
+  await api.setValue('settings', { yearFilter: 'only 2025', tax0: false, cancellations: false });
+  await api.setValue('ASIN_B000000001', JSON.stringify({ date: '01/01/2018', etv: 0 }));
+  await api.setValue('cancellations', ['B000000001']);
+  await api.db.products.put(api.createProductRow('other-profile', 'B000000002', { date: '01/01/2009' }, 0));
   const select = createYearSelect();
-  api.ensureXlsxYearFallbackOption(select);
-  const years = select.options.map(option => option.value);
-  assert.ok(years.includes('2023'));
-  assert.ok(years.includes('2025'));
-  assert.equal(select.value, String(new Date().getFullYear()));
+  await api.refreshXlsxYearSelector(select);
+  assert.deepEqual(select.options.map(option => option.value), reportYearsFrom(2018));
+  select.value = '2018';
+  await api.setValue('ASIN_B000000003', JSON.stringify({ date: '01/01/2011', etv: 15 }));
+  await api.refreshXlsxYearSelector(select);
+  assert.deepEqual(select.options.map(option => option.value), reportYearsFrom(2011));
+  assert.equal(select.value, '2018');
 });
 
 test('report years keep following partial Amazon hydration without overwriting a user choice', async () => {
@@ -2440,19 +2474,61 @@ test('report years keep following partial Amazon hydration without overwriting a
     disconnect() { this.disconnected = true; }
   };
   await api.initializeXlsxYearSelector(select);
-  assert.deepEqual(select.options.map(option => option.value), ['2025']);
+  assert.deepEqual(select.options.map(option => option.value), reportYearsFrom(2025));
   assert.equal(observers.length, 1, 'A single initial year must not end observation');
   amazonOptions = ['2026', '2025', '2024'].map(value => ({ value, textContent: value }));
   observers[0].callback([{ target: sourceSelect, addedNodes: [], removedNodes: [] }]);
-  assert.deepEqual(select.options.map(option => option.value), ['2026', '2025', '2024']);
+  assert.deepEqual(select.options.map(option => option.value), reportYearsFrom(2024));
   assert.equal(select.value, '2025');
   select.value = '2024';
   amazonOptions.push({ value: '2023', textContent: '2023' });
   observers[0].callback([{ target: sourceSelect, addedNodes: [], removedNodes: [] }]);
   assert.equal(select.value, '2024');
+  const renders = select.renders;
+  observers[0].callback([{ target: sourceSelect, addedNodes: [], removedNodes: [] }]);
+  assert.equal(select.renders, renders, 'An unchanged range must not rebuild the dropdown');
   select.isConnected = false;
   observers[0].callback([]);
   assert.equal(observers[0].disconnected, true);
+});
+
+test('Amazon mutations retain years contributed only by local products', async () => {
+  const { api, context } = await loadUserscript();
+  await api.setValue('ASIN_B000000001', JSON.stringify({ date: '01/01/2017', etv: 20 }));
+  let options = [{ value: '2025', textContent: '2025', selected: true }];
+  context.document.querySelectorAll = () => options;
+  context.document.body = {};
+  let callback;
+  context.MutationObserver = class {
+    constructor(fn) { callback = fn; }
+    observe() {}
+    disconnect() {}
+  };
+  const select = createYearSelect();
+  await api.initializeXlsxYearSelector(select);
+  options = [{ value: '2024', textContent: '2024' }];
+  const replacement = { matches: () => true };
+  callback([{ target: {}, addedNodes: [replacement], removedNodes: [] }]);
+  assert.deepEqual(select.options.map(option => option.value), reportYearsFrom(2017));
+  assert.equal(select.value, '2025');
+});
+
+test('a delayed report-year database read cannot overwrite a more recent dataset', async () => {
+  const { api, context } = await loadUserscript();
+  const select = createYearSelect();
+  let resolveRows;
+  let started;
+  const queryStarted = new Promise(resolve => { started = resolve; });
+  api.db.products.where = () => ({ equals: () => ({ toArray: () => {
+    started();
+    return new Promise(resolve => { resolveRows = resolve; });
+  } }) });
+  const staleRead = api.refreshXlsxYearSelector(select);
+  await queryStarted;
+  await api.refreshXlsxYearSelector(select, [{ date: '01/01/2011' }]);
+  resolveRows([{ data: { date: '01/01/2025' } }]);
+  await staleRead;
+  assert.deepEqual(select.options.map(option => option.value), reportYearsFrom(2011));
 });
 
 test('local product size is UTF-8 aware and excludes token/configuration records', async () => {
