@@ -1828,8 +1828,13 @@ GM_addStyle(`
             function ensureXlsxYearFallbackOption(selectEl) {
                 if (!selectEl) return;
                 if (selectEl.options.length === 0) {
-                    const currentYear = String(new Date().getFullYear());
-                    selectEl.innerHTML = `<option value="${currentYear}">${currentYear}</option>`;
+                    const currentYear = new Date().getFullYear();
+                    const startYear = deriveVineStartYear(2023);
+                    const years = [];
+                    for (let year = currentYear; year >= startYear; year--) {
+                        years.push(`<option value="${year}">${year}</option>`);
+                    }
+                    selectEl.innerHTML = years.join('');
                 }
             }
 
@@ -1840,7 +1845,7 @@ GM_addStyle(`
                         label: option.textContent.trim(),
                         selected: option.selected
                     }))
-                    .filter(option => option.value.length > 0);
+                    .filter(option => /^\d{4}$/.test(option.value));
             }
 
             function syncXlsxYearSelectFromAmazon(selectEl) {
@@ -1867,22 +1872,34 @@ GM_addStyle(`
             }
 
             async function initializeXlsxYearSelector(selectEl) {
+                if (!selectEl) return;
                 ensureXlsxYearFallbackOption(selectEl);
-                if (syncXlsxYearSelectFromAmazon(selectEl)) return;
-
-                // Amazon UI can render later; retry a few times.
-                for (let attempt = 0; attempt < 20; attempt++) {
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    if (syncXlsxYearSelectFromAmazon(selectEl)) return;
-                }
-
-                // Keep syncing in background if Amazon injects years later.
-                const observer = new MutationObserver(() => {
-                    if (syncXlsxYearSelectFromAmazon(selectEl)) {
+                // Amazon can add years in several hydration passes or replace
+                // the selector. One available year does not mean it is complete.
+                const sourceSelector = 'select#vvp-tax-year-dropdown';
+                const containsSourceSelect = node => Boolean(
+                    node?.matches?.(sourceSelector) || node?.querySelector?.(sourceSelector)
+                );
+                const observer = new MutationObserver(mutations => {
+                    if (!selectEl.isConnected) {
                         observer.disconnect();
+                        return;
                     }
+                    const sourceChanged = mutations.some(mutation => {
+                        const target = mutation.target.nodeType === 3
+                            ? mutation.target.parentElement : mutation.target;
+                        return target?.closest?.(sourceSelector)
+                            || Array.from(mutation.addedNodes || []).some(containsSourceSelect)
+                            || Array.from(mutation.removedNodes || []).some(containsSourceSelect);
+                    });
+                    // Ignore our own option writes and unrelated Amazon UI changes.
+                    if (sourceChanged) syncXlsxYearSelectFromAmazon(selectEl);
                 });
-                observer.observe(document.body, { childList: true, subtree: true });
+                observer.observe(document.body, {
+                    childList: true, subtree: true, characterData: true,
+                    attributes: true, attributeFilter: ['value', 'label', 'selected']
+                });
+                syncXlsxYearSelectFromAmazon(selectEl);
             }
 
             function deriveVineStartYear(defaultStartYear = 2023) {
@@ -7004,6 +7021,9 @@ async function createPieChart(list, parentElement) {
                       db,
                       bindLocalProfileToPrivateProfile,
                       buildYearFilterOptionsHtml,
+                      ensureXlsxYearFallbackOption,
+                      initializeXlsxYearSelector,
+                      readAmazonYearOptions,
                       buildLocalProfileId,
                       calculateEuerValues,
                       canonicalizeJson,

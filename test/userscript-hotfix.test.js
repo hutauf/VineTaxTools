@@ -2405,6 +2405,56 @@ test('UI settings keep backwards-compatible defaults for older partial records',
   assert.doesNotMatch(legacyYearOptions, /value="show all years" selected/);
 });
 
+function createYearSelect() {
+  return {
+    options: [], value: '', isConnected: true,
+    set innerHTML(html) {
+      this.options = Array.from(html.matchAll(/<option value="([^"]+)">([^<]*)<\/option>/g),
+        match => ({ value: match[1], textContent: match[2] }));
+      this.value = this.options[0]?.value || '';
+    }
+  };
+}
+
+test('report year fallback offers earlier years when Amazon has not rendered its selector', async () => {
+  const { api } = await loadUserscript();
+  const select = createYearSelect();
+  api.ensureXlsxYearFallbackOption(select);
+  const years = select.options.map(option => option.value);
+  assert.ok(years.includes('2023'));
+  assert.ok(years.includes('2025'));
+  assert.equal(select.value, String(new Date().getFullYear()));
+});
+
+test('report years keep following partial Amazon hydration without overwriting a user choice', async () => {
+  const { api, context } = await loadUserscript();
+  const select = createYearSelect();
+  let amazonOptions = [{ value: '2025', textContent: '2025', selected: true }];
+  context.document.querySelectorAll = () => amazonOptions;
+  const sourceSelect = { closest: () => sourceSelect };
+  context.document.body = {};
+  const observers = [];
+  context.MutationObserver = class {
+    constructor(callback) { this.callback = callback; observers.push(this); }
+    observe() {}
+    disconnect() { this.disconnected = true; }
+  };
+  await api.initializeXlsxYearSelector(select);
+  assert.deepEqual(select.options.map(option => option.value), ['2025']);
+  assert.equal(observers.length, 1, 'A single initial year must not end observation');
+  amazonOptions = ['2026', '2025', '2024'].map(value => ({ value, textContent: value }));
+  observers[0].callback([{ target: sourceSelect, addedNodes: [], removedNodes: [] }]);
+  assert.deepEqual(select.options.map(option => option.value), ['2026', '2025', '2024']);
+  assert.equal(select.value, '2025');
+  select.value = '2024';
+  amazonOptions.push({ value: '2023', textContent: '2023' });
+  observers[0].callback([{ target: sourceSelect, addedNodes: [], removedNodes: [] }]);
+  assert.equal(select.value, '2024');
+  select.isConnected = false;
+  observers[0].callback([]);
+  assert.equal(observers[0].disconnected, true);
+});
+
 test('local product size is UTF-8 aware and excludes token/configuration records', async () => {
   const { api } = await loadUserscript();
   assert.strictEqual(api.getUtf8ByteLength('abc'), 3);
