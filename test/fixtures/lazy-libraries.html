@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>VineTaxTools lazy library regression</title>
+<!-- Serve the repository root and open /test/fixtures/lazy-libraries.html.
+     The optional baseline URL is supplied by a before/after test server. -->
+<style>
+  body { font: 16px system-ui; margin: 32px; color: #172554; }
+  #results { white-space: pre-wrap; }
+  #chart { width: 600px; height: 300px; }
+</style>
+<h1>Lazy libraries in an isolated userscript sandbox</h1>
+<p>Uses synthetic data and the production loader. No Amazon or backend requests.</p>
+<pre id="results">Loading…</pre>
+<div id="d3-chart"></div>
+<table id="products"><thead><tr><th>Product</th></tr></thead><tbody><tr><td>Fixture</td></tr></tbody></table>
+<div id="chart"></div>
+<script>
+(async () => {
+  const results = document.getElementById('results');
+  const messages = [];
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const report = message => { messages.push(message); results.textContent = messages.join('\n'); };
+  try {
+    const sourceUrl = new URLSearchParams(location.search).has('baseline')
+      ? '/baseline.user.js' : '/main_order_tax_cancellations_eval.user.js';
+    const source = await (await fetch(sourceUrl)).text();
+    const start = source.indexOf('              const optionalLibraries =');
+    const end = source.indexOf('              async function postJson', start);
+    assert(start >= 0 && end > start, 'Production loader not found');
+    // Like a userscript manager, use a separate global object while Function
+    // still constructs functions in the underlying page realm.
+    const globals = Object.create(null);
+    const boundMethods = new Set(['addEventListener', 'removeEventListener',
+      'getComputedStyle', 'matchMedia', 'requestAnimationFrame', 'cancelAnimationFrame',
+      'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval']);
+    const sandbox = new Proxy(globals, {
+      get(target, key) {
+        if (Object.hasOwn(target, key)) return target[key];
+        const value = Reflect.get(window, key, window);
+        return boundMethods.has(key) && typeof value === 'function' ? value.bind(window) : value;
+      }
+    });
+    Object.assign(globals, { window: sandbox, self: sandbox, globalThis: sandbox });
+    const requests = [];
+    const gmRequest = async options => {
+      requests.push(options.url);
+      assert(options.method === 'GET', 'Only library downloads are allowed');
+      const response = await fetch(options.url);
+      assert(response.ok, `Library download failed: ${response.status}`);
+      return { status: response.status, responseText: await response.text() };
+    };
+    const load = new Function('globalThis', 'gmRequest',
+      `${source.slice(start, end)}\nreturn loadOptionalLibrary;`)(sandbox, gmRequest);
+    assert(requests.length === 0, 'Libraries must stay lazy');
+    report('PASS: no eager library downloads');
+
+    const d3 = await load('d3');
+    d3.select('#d3-chart').append('svg').attr('width', 200).attr('height', 50)
+      .append('rect').attr('width', 100).attr('height', 30).attr('fill', 'steelblue');
+    assert(document.querySelector('#d3-chart svg rect'), 'd3 chart missing');
+    assert(!window.d3, 'd3 leaked into the page');
+    report(`PASS: d3 ${d3.version} renders SVG in its own sandbox`);
+
+    await load('DataTable');
+    const table = sandbox.jQuery('#products').DataTable();
+    assert(table.rows().count() === 1, 'DataTables dependency failed');
+    assert(!window.jQuery, 'jQuery leaked into the page');
+    report('PASS: jQuery + DataTables render the fixture product');
+
+    const XLSX = await load('XLSX');
+    const sheet = XLSX.utils.aoa_to_sheet([['Product', 'ETV'], ['Fixture', 10]]);
+    assert(XLSX.utils.sheet_to_json(sheet)[0].ETV === 10, 'XLSX parse failed');
+    report(`PASS: XLSX ${XLSX.version} parses synthetic tax data`);
+
+    const Plotly = await load('Plotly');
+    await Plotly.newPlot('chart', [{ x: [1, 2], y: [10, 20], type: 'scatter' }],
+      { title: 'Synthetic ETV', width: 600, height: 300 }, { displayModeBar: false });
+    assert(document.querySelector('#chart .main-svg'), 'Plotly chart missing');
+    report(`PASS: Plotly ${Plotly.version} renders the chart`);
+    const count = requests.length;
+    await Promise.all(['d3', 'DataTable', 'XLSX', 'Plotly'].map(load));
+    assert(requests.length === count, 'Libraries downloaded more than once');
+    document.body.dataset.result = 'pass';
+    report('PASS: all libraries reuse their cached exports');
+  } catch (error) {
+    document.body.dataset.result = 'fail';
+    report(`FAIL: ${error.message}`);
+    console.error(error);
+  }
+})();
+</script>
+</html>

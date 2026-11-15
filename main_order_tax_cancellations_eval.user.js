@@ -21,14 +21,14 @@
 // @grant       GM_info
 // @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
 // @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.114204
+// @version     1.114207
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // ==/UserScript==
 
 const VTT_SCRIPT_VERSION = typeof GM_info !== 'undefined' && GM_info?.script?.version
   ? String(GM_info.script.version)
-  : '1.114204';
+  : '1.114207';
 
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
@@ -2640,11 +2640,18 @@ GM_addStyle(`
                     if (name === 'DataTable') await loadOptionalLibrary('jQuery');
                     const response = await gmRequest({ method: 'GET', url });
                     // These are the same pinned scripts previously executed via @require.
-                    // Disable CommonJS detection so each library uses its browser export.
+                    // Function may belong to the page realm in a userscript manager.
+                    // Bind browser globals and dependencies explicitly to the sandbox;
+                    // UMD exports written to `this` are not page-global identifiers.
                     const root = globalPath.split('.')[0];
-                    const exported = new Function('module', 'exports', 'define',
-                      `${response.responseText}\n;return typeof ${root} !== 'undefined' ? ${root} : window.${root};`
-                    ).call(globalThis, undefined, undefined, undefined);
+                    const exported = new Function(
+                      'module', 'exports', 'define', 'window', 'self', 'globalThis', 'jQuery', '$',
+                      `${response.responseText}\n;return this.${root} || (typeof ${root} !== 'undefined' ? ${root} : undefined);`
+                    ).call(
+                      globalThis,
+                      undefined, undefined, undefined,
+                      globalThis, globalThis, globalThis, globalThis.jQuery, globalThis.$
+                    );
                     globalThis[root] = exported;
                     if (name === 'jQuery') globalThis.$ = exported;
                     if (!available()) throw new Error(`${name} could not be initialized.`);

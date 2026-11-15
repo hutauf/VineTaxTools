@@ -19,7 +19,7 @@ const uiFixtureSource = fs.readFileSync(uiFixturePath, 'utf8');
 
 test('userscript metadata version is rendered in the generated box footer', () => {
   const metadataVersion = userscriptSource.match(/^\/\/ @version\s+(\S+)/m)?.[1];
-  assert.equal(metadataVersion, '1.114204');
+  assert.equal(metadataVersion, '1.114207');
   assert.match(userscriptSource, /const VTT_SCRIPT_VERSION =/);
   assert.match(userscriptSource, /Vine Tax Tools v\$\{escapeHtml\(VTT_SCRIPT_VERSION\)\}/);
   assert.match(userscriptSource, /class="vtt-version-footer"/);
@@ -2970,6 +2970,28 @@ test('optional libraries load once on demand, order dependencies, and retry fail
   fail = false;
   assert.equal((await api.loadOptionalLibrary('XLSX')).synthetic, true);
   await assert.rejects(api.loadOptionalLibrary('unknown'), /Unknown optional library/);
+});
+
+test('lazy browser exports survive a Function constructor from the page realm', async () => {
+  const { api, context } = await loadUserscript();
+  const page = vm.createContext({});
+  vm.runInContext('window = this; self = this;', page);
+  context.Function = vm.runInContext('Function', page);
+  context.window = page;
+  context.GM_xmlhttpRequest = options => options.onload({
+    status: 200,
+    responseText: options.url.includes('d3.v5')
+      ? '(function(root, factory) { factory(root.d3 = {}); })(this, function(exports) { exports.version = "5.16.0"; });'
+      : options.url.includes('jquery-')
+        ? 'window.jQuery = function() {}; window.jQuery.fn = {};'
+        : '(function($) { $.fn.DataTable = function() {}; })(jQuery);'
+  });
+
+  assert.equal((await api.loadOptionalLibrary('d3')).version, '5.16.0');
+  assert.equal(typeof await api.loadOptionalLibrary('DataTable'), 'function');
+  assert.equal(context.$, context.jQuery);
+  assert.equal(page.d3, undefined, 'Libraries must not leak onto the Amazon page');
+  assert.equal(page.jQuery, undefined, 'jQuery must remain in the userscript sandbox');
 });
 
 test('startup uses DOM readiness instead of waiting for window load and skips orders database validation', async () => {
