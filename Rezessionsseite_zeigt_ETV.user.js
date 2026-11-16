@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         Replace Rezensionsstatus with ETV
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Replace "Rezensionsstatus" column with ETV values from localStorage using Dexie.js
 // @author       You
 // @match        *://www.amazon.de/vine/vine-reviews?review-type=pending_review
 // @match        https://www.amazon.de/vine/vine-reviews
 // @require      https://unpkg.com/dexie@latest/dist/dexie.js
 // @grant        none
+// @updateURL   https://hutauf.org/userscripts/Rezessionsseite_zeigt_ETV.meta.js
+// @downloadURL https://hutauf.org/userscripts/Rezessionsseite_zeigt_ETV.user.js
 // ==/UserScript==
 
 (function() {

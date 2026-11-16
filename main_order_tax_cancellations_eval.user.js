@@ -19,16 +19,16 @@
 // @grant       GM_listValues
 // @grant       GM_setClipboard
 // @grant       GM_info
-// @updateURL   https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @downloadURL https://raw.githubusercontent.com/hutauf/VineTaxTools/refs/heads/main/main_order_tax_cancellations_eval.user.js
-// @version     1.114208
+// @version     1.114209
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
+// @updateURL   https://hutauf.org/userscripts/main_order_tax_cancellations_eval.meta.js
+// @downloadURL https://hutauf.org/userscripts/main_order_tax_cancellations_eval.user.js
 // ==/UserScript==
 
 const VTT_SCRIPT_VERSION = typeof GM_info !== 'undefined' && GM_info?.script?.version
   ? String(GM_info.script.version)
-  : '1.114208';
+  : '1.114209';
 
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');

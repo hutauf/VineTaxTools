@@ -13,11 +13,10 @@ Inwieweit dieses Tool wirklich hilfreich ist, kann ich nicht beurteilen, da die 
 ## Installation der Skripte
 
 1. **Violentmonkey** oder einen ähnlichen User-Skript-Manager über den Browser-Extension-Store installieren (einfach nach violentmonkey googln..).
-2. Gehe zu diesem Repository und klicke auf das Skript **`main_order_tax_cancellations_eval.user.js`**.
-3. Klicke auf **Raw**, um den Skript-Quelltext anzuzeigen.
-4. Violentmonkey erkennt das Skript automatisch und bietet die Installation an.
-5. Bestätige mit **Installieren**.
-6. Durch den im Skript hinterlegten `@updateURL` wird bei neuen Versionen automatisch ein Update angeboten.
+2. Öffne <https://hutauf.org/userscripts/> und klicke auf das Skript **taxsummary** (`main_order_tax_cancellations_eval.user.js`).
+3. Violentmonkey erkennt das Skript automatisch und bietet die Installation an.
+4. Bestätige mit **Installieren**.
+5. Durch den im Skript hinterlegten `@updateURL` wird bei neuen Versionen automatisch ein Update angeboten.
 
 ## Lokale Tests ohne Amazon-Login
 
@@ -27,7 +26,7 @@ echte Nutzerdaten testen:
 ```powershell
 npm ci
 npm test
-python -m unittest test.test_self_hosted_backend
+python -m unittest discover -s test -p "test_*.py"
 ```
 
 Für einen visuellen Browser-Smoke-Test wird eine echte alte Dexie-v1-Datenbank
