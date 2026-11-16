@@ -1,3 +1,10 @@
+> **Monorepo-Hinweis.** Dieser Ordner ist die Quelle des öffentlichen Repos `hutauf/VineTaxTools`.
+> Herkunft: importiert mit Historie am 2026-11-16 (Stand `3fa9124`). Bis zum Umschalten bleibt das Alt-Repo führend;
+> der Workflow `tax-userscripts` spiegelt diesen Ordner nur in den Branch `monorepo-dev` dort.
+> Der Inhalt dieses Ordners wird unverändert veröffentlicht, also hier nichts Internes ablegen.
+> Tests: Node 22, `npm ci && npm test`; Backend: `pip install -r requirements-dev.txt`,
+> dann `python -m unittest discover -s test -p "test_self_hosted_backend.py"`.
+
 # VineTaxTools
 
 **VineTaxTools** ist ein nützliches Set von User-Skripten, das Amazon Vine Voices (Produkttester) unterstützt, ihre Steuerberechnungen einfacher durchzuführen. Die Skripte erfassen relevante Informationen zu getesteten Produkten, dokumentieren diese und helfen bei der Schätzung von Steuerwerten.
