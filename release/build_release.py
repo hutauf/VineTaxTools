@@ -26,6 +26,7 @@ import html
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -43,9 +44,28 @@ def parse_meta(header_body: str) -> dict[str, str]:
     return meta
 
 
-def build_script(text: str, filename: str, base: str) -> tuple[str, str, dict[str, str]]:
+BACKEND_URL_RE = re.compile(r"^const VTT_HOSTED_BACKEND_URL = '([^']+)';$", re.MULTILINE)
+
+
+def set_backend_url(text: str, filename: str, backend_url: str) -> str:
+    """Point the hosted backend at another deployment (dev) and allow the request."""
+    if len(BACKEND_URL_RE.findall(text)) != 1:
+        raise ValueError(
+            f"{filename}: expected exactly one line \"const VTT_HOSTED_BACKEND_URL = '...';\". "
+            "The release build replaces it for the dev deployment; keep that form."
+        )
+    text = BACKEND_URL_RE.sub(lambda _m: f"const VTT_HOSTED_BACKEND_URL = '{backend_url}';", text)
+    host = urllib.parse.urlsplit(backend_url).hostname
+    if not re.search(rf"^// @connect\s+{re.escape(host)}$", text, re.MULTILINE):
+        text = text.replace("// ==/UserScript==", f"// @connect     {host}\n// ==/UserScript==", 1)
+    return text
+
+
+def build_script(text: str, filename: str, base: str, backend_url: str | None = None) -> tuple[str, str, dict[str, str]]:
     """Return (user.js text, meta.js text, metadata)."""
     text = text.replace("\r\n", "\n")
+    if backend_url and BACKEND_URL_RE.search(text):
+        text = set_backend_url(text, filename, backend_url)
     m = HEADER_RE.search(text)
     if not m:
         raise ValueError(
@@ -112,13 +132,13 @@ def render_index(entries: list[tuple[str, dict[str, str]]]) -> str:
 """
 
 
-def build(base: str, src: Path = SRC) -> dict[str, str]:
+def build(base: str, src: Path = SRC, backend_url: str | None = None) -> dict[str, str]:
     """Return {filename: content} for the whole release."""
     base = base.rstrip("/")
     out: dict[str, str] = {}
     entries: list[tuple[str, dict[str, str]]] = []
     for path in sorted(src.glob("*.user.js")):
-        user_js, meta_js, meta = build_script(path.read_text(encoding="utf-8"), path.name, base)
+        user_js, meta_js, meta = build_script(path.read_text(encoding="utf-8"), path.name, base, backend_url)
         out[path.name] = user_js
         out[path.name[: -len(".user.js")] + ".meta.js"] = meta_js
         entries.append((path.name, meta))
@@ -165,10 +185,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", required=True, help="public URL the release is served from")
     ap.add_argument("--out", help="directory to write the release to")
+    ap.add_argument("--backend-url", help="sync API of this deployment, if not production (dev)")
     ap.add_argument("--check-published", metavar="URL", help="fail if a changed script kept its @version")
     args = ap.parse_args()
     try:
-        files = build(args.base)
+        files = build(args.base, backend_url=args.backend_url)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

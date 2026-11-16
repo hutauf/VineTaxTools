@@ -75,14 +75,6 @@ Internetverbindung benötigt.
 - Auf der Bestellseite erscheint unten ein Button **"show all data"**, über den alle gesammelten Daten angezeigt werden.
 - Ein PDF-Link wird bereitgestellt, der die dokumentierte Teilwertschätzung enthält.
 
----
-
-### 2. Zusatzskript: `Rezessionsseite_zeigt_ETV.user.js`
-
-**Funktionalität:**
-- Dieses Skript zeigt den **ETV-Wert** (Estimated Tax Value) direkt auf der **Rezensionsseite** an.
-- Es bietet eine schnelle Übersicht über den Steuerwert, ohne zusätzliche Seiten aufzurufen.
-
 ## Haftungsausschluss
 Dieses Projekt wird inoffiziell bereitgestellt und steht in keinem Zusammenhang mit Amazon. Die Nutzung der Skripte erfolgt auf eigene Verantwortung.
 

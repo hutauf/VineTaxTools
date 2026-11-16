@@ -11,6 +11,7 @@
 // @connect     code.jquery.com
 // @connect     cdn.datatables.net
 // @connect     pythonanywhere.com
+// @connect     hutauf.org
 // @grant       GM_setValue
 // @grant       GM_addStyle
 // @grant       GM_getValue
@@ -19,7 +20,7 @@
 // @grant       GM_listValues
 // @grant       GM_setClipboard
 // @grant       GM_info
-// @version     1.114209
+// @version     1.114210
 // @author      -
 // @description Vine-Steuerdaten lokal verwalten, synchronisieren und auswerten
 // @updateURL   https://hutauf.org/userscripts/main_order_tax_cancellations_eval.meta.js
@@ -28,7 +29,17 @@
 
 const VTT_SCRIPT_VERSION = typeof GM_info !== 'undefined' && GM_info?.script?.version
   ? String(GM_info.script.version)
-  : '1.114209';
+  : '1.114210';
+
+// The hosted backend ("hutaufvine") moved from PythonAnywhere to hutauf.org.
+// Every other backend name is somebody's own PythonAnywhere account and keeps
+// its address. The release build replaces this URL for the dev deployment
+// (release/build_release.py --backend-url), so keep the line in this form.
+const VTT_HOSTED_BACKEND_NAME = 'hutaufvine';
+const VTT_HOSTED_BACKEND_URL = 'https://hutauf.org/vine-api/data_operations';
+// The shared catalog (ASIN, ETV, name of all users; returns Teilwert and PDF link)
+// lives next to it. It is always the hosted one, also for users with their own backend.
+const VTT_CATALOG_UPLOAD_URL = VTT_HOSTED_BACKEND_URL.replace(/data_operations$/, 'upload_asins');
 
 GM_addStyle(`
     @import url('https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css');
@@ -2344,7 +2355,11 @@ GM_addStyle(`
                 if (!isValidBackendName(backendName)) {
                   throw new Error('Invalid PythonAnywhere backend name.');
                 }
-                return `https://${backendName.trim().toLowerCase()}.pythonanywhere.com/data_operations`;
+                const normalizedBackendName = backendName.trim().toLowerCase();
+                // The profile id is built from the name, not the URL, so local
+                // data and unsynced changes stay with the profile.
+                if (normalizedBackendName === VTT_HOSTED_BACKEND_NAME) return VTT_HOSTED_BACKEND_URL;
+                return `https://${normalizedBackendName}.pythonanywhere.com/data_operations`;
               }
 
               function getStringHash(value) {
@@ -4433,7 +4448,7 @@ GM_addStyle(`
                     );
                     try {
                       const responseData = await postJson(
-                        'https://hutaufvine.pythonanywhere.com/upload_asins',
+                        VTT_CATALOG_UPLOAD_URL,
                         anonPayload
                       );
                       if (responseData?.status !== 'success') {
@@ -4925,7 +4940,7 @@ GM_addStyle(`
                           autocomplete="off"
                           spellcheck="false"
                         >
-                        <span class="vtt-help-text">PythonAnywhere-Benutzername; Standard ist hutaufvine.</span>
+                        <span class="vtt-help-text">Standard ist hutaufvine (gehostet auf hutauf.org). Für ein eigenes Backend: dein PythonAnywhere-Benutzername.</span>
                       </label>
                       <label class="vtt-field" for="backendTokenInput">
                         Persönlicher Token

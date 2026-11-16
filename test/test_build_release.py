@@ -55,6 +55,21 @@ class BuildReleaseTest(unittest.TestCase):
         )
         self.assertEqual(bumped, [])
 
+    def test_dev_build_points_hosted_backend_at_dev_api(self):
+        dev = "https://dev.example:8443/vine-api/data_operations"
+        prod_files = br.build("https://h.example/userscripts")
+        dev_files = br.build("https://dev.example:8443/userscripts", backend_url=dev)
+        name = "main_order_tax_cancellations_eval.user.js"
+        self.assertIn("const VTT_HOSTED_BACKEND_URL = 'https://hutauf.org/vine-api/data_operations';", prod_files[name])
+        self.assertIn(f"const VTT_HOSTED_BACKEND_URL = '{dev}';", dev_files[name])
+        self.assertNotIn("hutauf.org/vine-api", dev_files[name])
+        self.assertRegex(dev_files[name], r"(?m)^// @connect\s+dev\.example$")
+        self.assertNotRegex(prod_files[name], r"(?m)^// @connect\s+dev\.")
+
+    def test_backend_url_line_must_be_unique(self):
+        with self.assertRaises(ValueError):
+            br.set_backend_url("// ==UserScript==\n// ==/UserScript==\n", "x.user.js", "https://d.example/api")
+
 
 if __name__ == "__main__":
     unittest.main()

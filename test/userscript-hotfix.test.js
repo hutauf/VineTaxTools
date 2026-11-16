@@ -19,7 +19,7 @@ const uiFixtureSource = fs.readFileSync(uiFixturePath, 'utf8');
 
 test('userscript metadata version is rendered in the generated box footer', () => {
   const metadataVersion = userscriptSource.match(/^\/\/ @version\s+(\S+)/m)?.[1];
-  assert.equal(metadataVersion, '1.114209');
+  assert.equal(metadataVersion, '1.114210');
   assert.match(userscriptSource, /const VTT_SCRIPT_VERSION =/);
   assert.match(userscriptSource, /Vine Tax Tools v\$\{escapeHtml\(VTT_SCRIPT_VERSION\)\}/);
   assert.match(userscriptSource, /class="vtt-version-footer"/);
@@ -3181,4 +3181,32 @@ test('orders V2 leaves rejected intents for account-page repair and reports inco
   assert.deepEqual(requests, ['get_capabilities_v2', 'sync_v2_push']);
   assert.equal((await api.db.syncState.get(config.profileId)).serverRepairRequired, true);
   assert.equal(JSON.parse(await api.getValue('ASIN_B000000001')).name, 'Visible');
+});
+
+test('the hosted backend name points to hutauf.org, own backends stay on PythonAnywhere', async () => {
+  const { api } = await loadUserscript();
+  assert.equal(api.getPrivateBackendUrl('hutaufvine'), 'https://hutauf.org/vine-api/data_operations');
+  assert.equal(api.getPrivateBackendUrl('  HutaufVine '), 'https://hutauf.org/vine-api/data_operations');
+  assert.equal(api.getPrivateBackendUrl('someoneelse'), 'https://someoneelse.pythonanywhere.com/data_operations');
+  assert.match(userscriptSource, /^\/\/ @connect\s+hutauf\.org$/m);
+  assert.match(userscriptSource, /^\/\/ @connect\s+pythonanywhere\.com$/m);
+});
+
+test('the backend move keeps the local profile id', async () => {
+  const { api } = await loadUserscript();
+  // Built from the backend name and token only; the URL is not part of it.
+  const id = api.buildLocalProfileId('redacted-test-token', 'hutaufvine');
+  assert.match(id, /^private:hutaufvine:/);
+  assert.equal(id, api.buildLocalProfileId('redacted-test-token'));
+  assert.notEqual(id, api.buildLocalProfileId('redacted-test-token', 'someoneelse'));
+});
+
+test('nothing in the script talks to the old hosted backend any more', () => {
+  // Own backends still use <name>.pythonanywhere.com; the old hosted one must not appear.
+  assert.doesNotMatch(userscriptSource, /hutaufvine\.pythonanywhere\.com/);
+  assert.match(
+    userscriptSource,
+    /const VTT_CATALOG_UPLOAD_URL = VTT_HOSTED_BACKEND_URL\.replace\(\/data_operations\$\/, 'upload_asins'\);/,
+  );
+  assert.match(userscriptSource, /postJson\(\s*VTT_CATALOG_UPLOAD_URL,/);
 });
