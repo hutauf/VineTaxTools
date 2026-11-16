@@ -4,6 +4,13 @@
 > Der Inhalt dieses Ordners wird unverändert veröffentlicht, also hier nichts Internes ablegen.
 > Tests: Node 22, `npm ci && npm test`; Backend: `pip install -r requirements-dev.txt`,
 > dann `python -m unittest discover -s test -p "test_self_hosted_backend.py"`.
+>
+> **Release.** Jeder Push auf `main` baut die Skripte mit `release/build_release.py` und liefert sie aus:
+> erst Dev (`http://192.168.0.182:8089/userscripts/`, nur Heimnetz), dann `https://hutauf.org/userscripts/`.
+> Der Build setzt `@updateURL`/`@downloadURL` auf den jeweiligen Host. Nutzer bekommen ein Update nur bei höherer
+> `@version`; CI bricht ab, wenn ein Skript geändert wurde, die `@version` aber gleich blieb.
+> Bestehende Installationen aktualisieren noch über `VineTaxTools`; sie wechseln erst beim Umschalten
+> (siehe Plan 0001 im Monorepo).
 
 # VineTaxTools
 
