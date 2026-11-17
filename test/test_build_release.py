@@ -39,6 +39,27 @@ class BuildReleaseTest(unittest.TestCase):
             if name.endswith(".js"):
                 self.assertNotIn("raw.githubusercontent.com/hutauf/VineTaxTools", content.split("==/UserScript==")[0])
 
+    def test_private_scripts_are_unlisted_in_a_sub_path(self):
+        private_src = Path(__file__).resolve().parents[3] / "selection" / "userscripts"
+        files = br.build("https://h.example/userscripts", private_src=private_src, private_path="p/abcdefABCDEF12")
+        name = "p/abcdefABCDEF12/vine_category_counts.user.js"
+        self.assertIn(name, files)
+        self.assertIn("p/abcdefABCDEF12/vine_category_counts.meta.js", files)
+        self.assertIn("// @updateURL   https://h.example/userscripts/p/abcdefABCDEF12/vine_category_counts.meta.js",
+                      files[name])
+        self.assertNotIn("vine_category_counts", files["index.html"])
+        self.assertNotIn("abcdefABCDEF12", files["index.html"])
+        self.assertNotIn("p/abcdefABCDEF12/index.html", files)
+        # the public build (also used for the VineTaxTools mirror) has none of it
+        self.assertFalse(any("vine_category_counts" in n for n in br.build("https://h.example/userscripts")))
+
+    def test_private_options_need_each_other_and_a_long_path(self):
+        src = Path(__file__).resolve().parents[3] / "selection" / "userscripts"
+        with self.assertRaises(ValueError):
+            br.build("https://h.example", private_src=src)
+        with self.assertRaises(ValueError):
+            br.build("https://h.example", private_src=src, private_path="p/short")
+
     def test_changed_script_needs_new_version(self):
         built, _, _ = br.build_script(SCRIPT, "demo.user.js", "https://h.example")
         files = {"demo.user.js": built}

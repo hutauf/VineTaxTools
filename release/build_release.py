@@ -18,6 +18,12 @@ own host.
 compares the build against what is live at URL and fails if a script changed
 without a new @version. Script managers only update on a higher @version, so
 such a change would never reach users.
+
+    --private-src DIR --private-path p/<random>
+
+also builds the *.user.js from DIR into <out>/<private-path>/, with update URLs
+there. They are reachable without login but linked nowhere: not in index.html,
+not in the public VineTaxTools mirror (which builds without these options).
 """
 from __future__ import annotations
 
@@ -132,19 +138,35 @@ def render_index(entries: list[tuple[str, dict[str, str]]]) -> str:
 """
 
 
-def build(base: str, src: Path = SRC, backend_url: str | None = None) -> dict[str, str]:
-    """Return {filename: content} for the whole release."""
-    base = base.rstrip("/")
+PRIVATE_PATH_RE = re.compile(r"^[A-Za-z0-9]+/[A-Za-z0-9]{12,}$")
+
+
+def _scripts(src: Path, base: str, prefix: str, backend_url: str | None):
     out: dict[str, str] = {}
     entries: list[tuple[str, dict[str, str]]] = []
     for path in sorted(src.glob("*.user.js")):
         user_js, meta_js, meta = build_script(path.read_text(encoding="utf-8"), path.name, base, backend_url)
-        out[path.name] = user_js
-        out[path.name[: -len(".user.js")] + ".meta.js"] = meta_js
+        out[prefix + path.name] = user_js
+        out[prefix + path.name[: -len(".user.js")] + ".meta.js"] = meta_js
         entries.append((path.name, meta))
     if not entries:
         raise ValueError(f"No *.user.js found in {src}.")
+    return out, entries
+
+
+def build(base: str, src: Path = SRC, backend_url: str | None = None,
+          private_src: Path | None = None, private_path: str | None = None) -> dict[str, str]:
+    """Return {relative path: content} for the whole release."""
+    base = base.rstrip("/")
+    out, entries = _scripts(src, base, "", backend_url)
     out["index.html"] = render_index(entries)
+    if (private_src is None) != (private_path is None):
+        raise ValueError("--private-src and --private-path only work together.")
+    if private_src is not None:
+        if not PRIVATE_PATH_RE.match(private_path):
+            raise ValueError(f"--private-path must look like 'p/<at least 12 letters or digits>', got '{private_path}'.")
+        private, _ = _scripts(private_src, f"{base}/{private_path}", private_path + "/", backend_url)
+        out.update(private)  # deliberately no index page: the directory stays unlisted
     return out
 
 
@@ -166,6 +188,7 @@ def check_published(files: dict[str, str], published_base: str, fetcher=fetch) -
     for name, content in files.items():
         if not name.endswith(".user.js"):
             continue
+        source = f"tax/userscripts/{name}" if "/" not in name else f"selection/userscripts/{name.rsplit('/', 1)[1]}"
         live = fetcher(f"{published_base.rstrip('/')}/{name}")
         if live is None or live == content:
             continue
@@ -175,8 +198,7 @@ def check_published(files: dict[str, str], published_base: str, fetcher=fetch) -
         if live_v == new_v:
             errors.append(
                 f"{name} differs from the published script but still has @version {new_v}. "
-                "Script managers only update on a higher version: raise '// @version' in "
-                f"tax/userscripts/{name}."
+                f"Script managers only update on a higher version: raise '// @version' in {source}."
             )
     return errors
 
@@ -187,9 +209,12 @@ def main() -> int:
     ap.add_argument("--out", help="directory to write the release to")
     ap.add_argument("--backend-url", help="sync API of this deployment, if not production (dev)")
     ap.add_argument("--check-published", metavar="URL", help="fail if a changed script kept its @version")
+    ap.add_argument("--private-src", type=Path, help="directory with unlisted scripts (selection/userscripts)")
+    ap.add_argument("--private-path", help="unlisted sub path for them, e.g. p/<random>")
     args = ap.parse_args()
     try:
-        files = build(args.base, backend_url=args.backend_url)
+        files = build(args.base, backend_url=args.backend_url,
+                      private_src=args.private_src, private_path=args.private_path)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
@@ -204,6 +229,7 @@ def main() -> int:
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)
         for name, content in files.items():
+            (out / name).parent.mkdir(parents=True, exist_ok=True)
             (out / name).write_text(content, encoding="utf-8", newline="\n")
         print(f"wrote {len(files)} files to {out}")
     return 0
