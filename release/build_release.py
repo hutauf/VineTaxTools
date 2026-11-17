@@ -31,6 +31,7 @@ import argparse
 import html
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -173,6 +174,9 @@ def build(base: str, src: Path = SRC, backend_url: str | None = None,
 def fetch(url: str) -> str | None:
     """Published content, or None if nothing is published there yet."""
     # Cloudflare in front of hutauf.org rejects the default Python user agent.
+    # The query string bypasses Cloudflare's cache: asking for a script that is not
+    # deployed yet must not leave a cached 404 at its real URL.
+    url = f"{url}?nocache={int(time.time())}"
     req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0", "Cache-Control": "no-cache"})
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
